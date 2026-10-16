@@ -64,7 +64,7 @@ struct ChatRow: View {
         case .contactConnection: return String(localized: "Waiting for connection…")
         default:
             guard let item = chat.chatItems.last else { return "" }
-            return item.text
+            return plainMessageText(item.text, item.formattedText)
         }
     }
 

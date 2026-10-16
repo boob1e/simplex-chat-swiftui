@@ -38,6 +38,14 @@ final class ChatStore {
         return chats.first { $0.id == selectedChatId }
     }
 
+    /// A SimpleX link to connect to, from a message or opened from another app. Shows the New Chat sheet.
+    var pendingConnectLink: PendingLink?
+
+    struct PendingLink: Identifiable {
+        let uri: String
+        var id: String { uri }
+    }
+
     private var receiver: Thread?
     private var reloadTask: Task<Void, Never>?
 

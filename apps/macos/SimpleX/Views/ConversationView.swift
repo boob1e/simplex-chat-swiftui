@@ -24,9 +24,15 @@ struct ConversationView: View {
         }
     }
 
+    private var userMemberId: String? {
+        if case let .group(groupInfo, _) = chat.chatInfo { return groupInfo.membership.memberId }
+        return nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             MessageList(items: store.items, isGroup: chat.chatInfo.chatType == .group,
+                        userMemberId: userMemberId,
                         onReachTop: { store.loadOlderItems() })
             Divider()
             ComposeBar(enabled: chat.chatInfo.sendMsgEnabled) { text in

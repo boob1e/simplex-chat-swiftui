@@ -35,5 +35,8 @@ struct MainView: View {
         .sheet(isPresented: $showNewChat) {
             NewChatSheet()
         }
+        .sheet(item: $store.pendingConnectLink) { link in
+            NewChatSheet(initialLink: link.uri)
+        }
     }
 }

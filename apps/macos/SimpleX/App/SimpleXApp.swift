@@ -20,6 +20,10 @@ struct SimpleXApp: App {
         Window("SimpleX", id: "main") {
             RootView(showNewChat: $showNewChat)
                 .environment(store)
+                .onOpenURL { url in
+                    // simplex:/ links opened from other apps
+                    if store.phase == .running { store.pendingConnectLink = .init(uri: url.absoluteString) }
+                }
         }
         .defaultSize(width: 980, height: 680)
         .commands {

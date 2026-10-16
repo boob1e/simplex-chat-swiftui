@@ -17,10 +17,12 @@ struct MessageRowModel: Equatable, Identifiable {
     /// Last message in a run from the same sender: shows the avatar and a bubble tail.
     let endsRun: Bool
     let isGroup: Bool
+    /// The user's member ID in a group, to highlight mentions of the user.
+    let userMemberId: String?
 
     var id: Int64 { item.id }
 
-    static func rows(for items: [ChatItem], isGroup: Bool) -> [MessageRowModel] {
+    static func rows(for items: [ChatItem], isGroup: Bool, userMemberId: String?) -> [MessageRowModel] {
         let cal = Calendar.current
         return items.indices.map { i in
             let item = items[i]
@@ -40,7 +42,8 @@ struct MessageRowModel: Equatable, Identifiable {
                 senderImage: member?.image,
                 dayHeader: newDay ? item.meta.itemTs : nil,
                 endsRun: endsRun,
-                isGroup: isGroup
+                isGroup: isGroup,
+                userMemberId: userMemberId
             )
         }
     }
@@ -53,6 +56,8 @@ struct MessageRowModel: Equatable, Identifiable {
 
 struct MessageRow: View {
     let model: MessageRowModel
+    @State private var revealedSecrets: Set<Int> = []
+    @Environment(\.openURL) private var openURL
 
     private var item: ChatItem { model.item }
     private var sent: Bool { item.chatDir.sent }
@@ -80,6 +85,8 @@ struct MessageRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.bottom, model.endsRun ? 6 : 0)
+        // Table cells are reused, so per-message state must not carry over to another message.
+        .id(model.id)
     }
 
     /// Group events, connection events and similar service items render as centered captions.
@@ -123,7 +130,20 @@ struct MessageRow: View {
                 .font(.body)
                 .textSelection(.enabled)
                 .foregroundStyle(sent ? Color.white : Color.primary)
+                .tint(sent ? .white : .accentColor)
                 .fixedSize(horizontal: false, vertical: true)
+                .environment(\.openURL, OpenURLAction { url in
+                    if url.scheme == MessageLink.secretScheme, let i = url.host().flatMap(Int.init) {
+                        revealedSecrets.formSymmetricDifference([i])
+                        return .handled
+                    }
+                    if let uri = MessageLink.connectUri(url) {
+                        ChatStore.shared.pendingConnectLink = .init(uri: uri)
+                        return .handled
+                    }
+                    openURL(url)
+                    return .handled
+                })
             HStack(spacing: 3) {
                 if item.meta.itemEdited { Text("edited") }
                 Text(item.meta.itemTs, format: .dateTime.hour().minute())
@@ -147,8 +167,12 @@ struct MessageRow: View {
             s.inlinePresentationIntent = .emphasized
             return s
         }
-        // Plain text keeps rows fast; markdown runs from the core can be added here.
-        return AttributedString(item.text)
+        return formattedMessage(item.text, item.formattedText, style: MessageTextStyle(
+            onAccent: sent,
+            revealedSecrets: revealedSecrets,
+            mentions: item.mentions,
+            userMemberId: model.userMemberId
+        ))
     }
 
     private var statusIcon: String? {

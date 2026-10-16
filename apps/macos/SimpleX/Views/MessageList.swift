@@ -13,6 +13,7 @@ import SimpleXChat
 struct MessageList: NSViewRepresentable {
     let items: [ChatItem]
     let isGroup: Bool
+    let userMemberId: String?
     let onReachTop: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -52,6 +53,7 @@ struct MessageList: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.onReachTop = onReachTop
         context.coordinator.isGroup = isGroup
+        context.coordinator.userMemberId = userMemberId
         context.coordinator.apply(items)
     }
 
@@ -61,11 +63,12 @@ struct MessageList: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         var onReachTop: () -> Void = {}
         var isGroup = false
+        var userMemberId: String?
         private var rows: [MessageRowModel] = []
 
         func apply(_ items: [ChatItem]) {
             guard let table else { return }
-            let newRows = MessageRowModel.rows(for: items, isGroup: isGroup)
+            let newRows = MessageRowModel.rows(for: items, isGroup: isGroup, userMemberId: userMemberId)
             let old = rows
             guard newRows != old else { return }
             let wasAtBottom = isAtBottom

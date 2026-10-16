@@ -72,9 +72,14 @@ struct NewChatSheet: View {
         var id: Self { self }
     }
 
-    @State private var mode: Mode = .invite
+    @State private var mode: Mode
     @State private var invitation: String?
-    @State private var link = ""
+    @State private var link: String
+
+    init(initialLink: String? = nil) {
+        _mode = State(initialValue: initialLink == nil ? .invite : .connect)
+        _link = State(initialValue: initialLink ?? "")
+    }
     @State private var working = false
     @State private var status: String?
 

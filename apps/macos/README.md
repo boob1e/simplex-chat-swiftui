@@ -30,6 +30,6 @@ Don't use a core built by `scripts/desktop/build-lib-mac.sh` alone: without the 
 
 ## Status
 
-Implemented (sending and receiving text between accounts verified): profile creation, chat list with search, conversations (text), sending, live updates from the core, one-time invitation links, and connecting via contact links.
+Implemented (sending and receiving text between accounts verified): profile creation, chat list with search, conversations (text), sending, live updates from the core, one-time invitation links, connecting via contact links, formatted text (markdown, links, secrets, mentions), and clean shutdown on quit.
 
-Not done yet: files and media, voice messages, joining groups, calls, notifications, multiple profiles, database passphrase and migration, and markdown rendering.
+Not done yet: files and media, voice messages, joining groups, calls, notifications, multiple profiles, and database passphrase and migration.
