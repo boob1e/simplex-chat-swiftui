@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SimpleXChat
+import UserNotifications
 
 struct CreateProfileView: View {
     @Environment(ChatStore.self) private var store
@@ -221,6 +222,7 @@ struct SettingsView: View {
                     Text("No profile yet").foregroundStyle(.secondary)
                 }
             }
+            NotificationSettingsSection()
             Section("Database") {
                 LabeledContent("Location") {
                     Text(getAppDatabasePath().deletingLastPathComponent().path)
@@ -241,4 +243,36 @@ func showShareSheet(items: [Any], completed: (() -> Void)? = nil) {
     let picker = NSSharingServicePicker(items: items)
     picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
     completed?()
+}
+
+struct NotificationSettingsSection: View {
+    @State private var previewMode = ntfPreviewModeGroupDefault.get()
+    @State private var status: UNAuthorizationStatus = NotificationManager.shared.authorization
+
+    var body: some View {
+        Section {
+            Picker("Show in notifications", selection: $previewMode) {
+                ForEach(NotificationPreviewMode.values) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .onChange(of: previewMode) { _, mode in ntfPreviewModeGroupDefault.set(mode) }
+            if status == .denied {
+                LabeledContent("Notifications are turned off for SimpleX in System Settings.") {
+                    Button("Open System Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+                    }
+                }
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text("Muting and mentions-only are set per chat.")
+                .foregroundStyle(.secondary)
+        }
+        .task {
+            await NotificationManager.shared.refreshAuthorization()
+            status = NotificationManager.shared.authorization
+        }
+    }
 }

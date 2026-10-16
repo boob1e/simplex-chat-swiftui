@@ -7,6 +7,7 @@
 
 import Foundation
 import Observation
+import AppKit
 import SimpleXChat
 
 enum AppPhase: Equatable {
@@ -21,9 +22,26 @@ enum AppPhase: Equatable {
 final class ChatStore {
     static let shared = ChatStore()
 
+    private init() {
+        // Messages that arrived in the open chat while the app was in the background are read now.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                let store = ChatStore.shared
+                if let chatId = store.selectedChatId { store.markRead(chatId) }
+            }
+        }
+    }
+
+    /// The chat is open in the key window of the frontmost app, so the user sees new messages as they arrive.
+    func isViewing(_ chatId: ChatId) -> Bool {
+        NSApp.isActive && NSApp.keyWindow != nil && selectedChatId == chatId
+    }
+
     private(set) var phase: AppPhase = .starting
     private(set) var currentUser: User?
-    private(set) var chats: [ChatData] = []
+    private(set) var chats: [ChatData] = [] {
+        didSet { NotificationManager.shared.updateBadge(chats) }
+    }
 
     var selectedChatId: ChatId? {
         didSet { if selectedChatId != oldValue { openSelectedChat() } }
@@ -101,7 +119,10 @@ final class ChatStore {
         try setNetworkConfig(getNetCfg())
         try apiSetAppFilePaths()
         _ = try apiStartChat()
-        await MainActor.run { self.startReceiver() }
+        await MainActor.run {
+            self.startReceiver()
+            NotificationManager.shared.setUp()
+        }
         try await reloadChats()
         await MainActor.run { self.phase = .running }
     }
@@ -204,6 +225,7 @@ final class ChatStore {
     }
 
     private func markRead(_ chatId: ChatId) {
+        NotificationManager.shared.removeNotifications(for: chatId)
         guard let i = chats.firstIndex(where: { $0.id == chatId }), chats[i].chatStats.unreadCount > 0 || chats[i].chatStats.unreadChat else { return }
         let info = chats[i].chatInfo
         chats[i].chatStats = ChatStats()
@@ -235,8 +257,11 @@ final class ChatStore {
         }
         switch evt {
         case let .newChatItems(user, aItems):
-            guard isCurrentUser(user) else { return }
-            for a in aItems { add(a.chatItem, to: a.chatInfo) }
+            guard isCurrentUser(user), let currentUser else { return }
+            for a in aItems {
+                add(a.chatItem, to: a.chatInfo)
+                NotificationManager.shared.notifyMessage(currentUser, a.chatInfo, a.chatItem)
+            }
         case let .chatItemUpdated(user, a):
             guard isCurrentUser(user) else { return }
             update(a.chatItem, in: a.chatInfo)
@@ -249,16 +274,24 @@ final class ChatStore {
                 if let to = d.toChatItem { update(to.chatItem, in: to.chatInfo) }
                 else { remove(d.deletedChatItem.chatItem.id, from: d.deletedChatItem.chatInfo.id) }
             }
-        case let .contactConnected(user, contact, _), let .contactUpdated(user, contact), let .contactSndReady(user, contact):
+        case let .contactConnected(user, contact, _):
+            guard isCurrentUser(user), let currentUser else { return }
+            updateInfo(.direct(contact: contact))
+            NotificationManager.shared.notifyContactConnected(currentUser, contact)
+        case let .contactUpdated(user, contact), let .contactSndReady(user, contact):
             guard isCurrentUser(user) else { return }
             updateInfo(.direct(contact: contact))
+        case let .receivedContactRequest(user, request, _):
+            guard isCurrentUser(user), let currentUser else { return }
+            scheduleReload()
+            NotificationManager.shared.notifyContactRequest(currentUser, request)
         case let .chatInfoUpdated(user, info):
             guard isCurrentUser(user) else { return }
             updateInfo(info)
         case let .groupUpdated(user, groupInfo):
             guard isCurrentUser(user) else { return }
             updateInfo(.group(groupInfo: groupInfo, groupChatScope: nil))
-        case .receivedContactRequest, .contactDeletedByContact, .contactConnecting,
+        case .contactDeletedByContact, .contactConnecting,
              .receivedGroupInvitation, .userJoinedGroup, .groupDeleted, .deletedMemberUser:
             scheduleReload()
         default:
@@ -275,7 +308,7 @@ final class ChatStore {
             var chat = chats.remove(at: i)
             chat.chatInfo = info
             chat.chatItems = [item]
-            if item.isRcvNew && selectedChatId != info.id { chat.chatStats.unreadCount += 1 }
+            if item.isRcvNew && !isViewing(info.id) { chat.chatStats.unreadCount += 1 }
             chats.insert(chat, at: 0)
         } else {
             scheduleReload()
@@ -286,7 +319,7 @@ final class ChatStore {
             } else {
                 items.append(item)
             }
-            if item.isRcvNew { markRead(info.id) }
+            if item.isRcvNew && isViewing(info.id) { markRead(info.id) }
         }
     }
 
