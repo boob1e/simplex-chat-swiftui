@@ -49,7 +49,23 @@ final class ChatStore {
     /// Items of the open conversation, oldest first.
     private(set) var items: [ChatItem] = []
     private(set) var hasOlderItems = true
+    /// After jumping into older history, the loaded items don't reach the latest message.
+    private(set) var hasNewerItems = false
     private var loadingOlder = false
+    private var loadingNewer = false
+
+    /// The message being replied to in the open chat.
+    var replyTo: ChatItem?
+    /// Asks the message list to scroll to an item, e.g. after clicking a quote.
+    private(set) var scrollRequest: ScrollRequest?
+    /// Briefly highlighted item, after jumping to it.
+    private(set) var highlightedItemId: Int64?
+    private var highlightTask: Task<Void, Never>?
+
+    struct ScrollRequest: Equatable {
+        let itemId: Int64
+        let token = UUID()
+    }
 
     var selectedChat: ChatData? {
         guard let selectedChatId else { return nil }
@@ -191,6 +207,9 @@ final class ChatStore {
     private func openSelectedChat() {
         items = []
         hasOlderItems = true
+        hasNewerItems = false
+        replyTo = nil
+        highlightedItemId = nil
         guard let chatId = selectedChatId else { return }
         Task {
             do {
@@ -218,10 +237,57 @@ final class ChatStore {
         }
     }
 
+    func loadNewerItems() {
+        guard let chatId = selectedChatId, hasNewerItems, !loadingNewer, let last = items.last else { return }
+        loadingNewer = true
+        Task {
+            defer { loadingNewer = false }
+            guard let chat = try? await apiGetChat(chatId: chatId, pagination: .after(chatItemId: last.id, count: ChatPagination.PRELOAD_COUNT)),
+                  selectedChatId == chatId else { return }
+            let known = Set(items.map(\.id))
+            items.append(contentsOf: chat.chatItems.filter { !known.contains($0.id) })
+            hasNewerItems = chat.chatItems.count >= ChatPagination.PRELOAD_COUNT
+        }
+    }
+
+    /// Returns to the latest messages, e.g. after sending while viewing older history.
+    private func reloadLatest() async {
+        guard let chatId = selectedChatId,
+              let chat = try? await apiGetChat(chatId: chatId, pagination: .last(count: ChatPagination.INITIAL_COUNT)),
+              selectedChatId == chatId else { return }
+        items = chat.chatItems
+        hasOlderItems = chat.chatItems.count >= ChatPagination.INITIAL_COUNT
+        hasNewerItems = false
+    }
+
     func send(_ text: String) async throws {
         guard let chat = selectedChat else { return }
-        let sent = try await apiSendText(text, to: chat.chatInfo)
+        let quoted = replyTo
+        let sent = try await apiSendText(text, to: chat.chatInfo, quotedItemId: quoted?.id)
+        if replyTo?.id == quoted?.id { replyTo = nil }
+        if hasNewerItems { await reloadLatest() }
         for item in sent { add(item, to: chat.chatInfo) }
+    }
+
+    /// Scrolls to an item and highlights it, loading the history around it if it isn't loaded.
+    func jump(to itemId: Int64) {
+        guard let chatId = selectedChatId else { return }
+        Task {
+            if !items.contains(where: { $0.id == itemId }) {
+                guard let chat = try? await apiGetChat(chatId: chatId, pagination: .around(chatItemId: itemId, count: ChatPagination.PRELOAD_COUNT)),
+                      selectedChatId == chatId, chat.chatItems.contains(where: { $0.id == itemId }) else { return }
+                items = chat.chatItems
+                hasOlderItems = true
+                hasNewerItems = true
+            }
+            scrollRequest = ScrollRequest(itemId: itemId)
+            highlightedItemId = itemId
+            highlightTask?.cancel()
+            highlightTask = Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                if !Task.isCancelled, highlightedItemId == itemId { highlightedItemId = nil }
+            }
+        }
     }
 
     private func markRead(_ chatId: ChatId) {
@@ -316,7 +382,7 @@ final class ChatStore {
         if selectedChatId == info.id {
             if let j = items.lastIndex(where: { $0.id == item.id }) {
                 items[j] = item
-            } else {
+            } else if !hasNewerItems {
                 items.append(item)
             }
             if item.isRcvNew && isViewing(info.id) { markRead(info.id) }

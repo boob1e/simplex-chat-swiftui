@@ -111,10 +111,10 @@ func apiGetChat(chatId: ChatId, pagination: ChatPagination) async throws -> Chat
     throw r.unexpected
 }
 
-func apiSendText(_ text: String, to chat: ChatInfo) async throws -> [ChatItem] {
+func apiSendText(_ text: String, to chat: ChatInfo, quotedItemId: Int64? = nil) async throws -> [ChatItem] {
     let cmd: ChatCommand = .apiSendMessages(
         type: chat.chatType, id: chat.apiId, scope: nil, sendAsGroup: false, live: false, ttl: nil, sign: false,
-        composedMessages: [ComposedMessage(msgContent: .text(text))]
+        composedMessages: [ComposedMessage(quotedItemId: quotedItemId, msgContent: .text(text))]
     )
     let r: ChatResponse1 = try await chatSendCmd(cmd)
     if case let .newChatItems(_, items) = r { return items.map(\.chatItem) }

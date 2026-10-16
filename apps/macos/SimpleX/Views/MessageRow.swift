@@ -19,10 +19,28 @@ struct MessageRowModel: Equatable, Identifiable {
     let isGroup: Bool
     /// The user's member ID in a group, to highlight mentions of the user.
     let userMemberId: String?
+    /// Who wrote the quoted message, when this message is a reply.
+    let quoteSender: String?
+    let highlighted: Bool
 
     var id: Int64 { item.id }
 
-    static func rows(for items: [ChatItem], isGroup: Bool, userMemberId: String?) -> [MessageRowModel] {
+    var canReply: Bool {
+        switch item.content {
+        case .sndMsgContent, .rcvMsgContent: !item.isDeletedContent && item.meta.itemDeleted == nil
+        default: false
+        }
+    }
+
+    struct Context {
+        let isGroup: Bool
+        let chatName: String
+        let membership: GroupMember?
+        let highlightedItemId: Int64?
+    }
+
+    static func rows(for items: [ChatItem], _ ctx: Context) -> [MessageRowModel] {
+        let isGroup = ctx.isGroup
         let cal = Calendar.current
         return items.indices.map { i in
             let item = items[i]
@@ -43,7 +61,9 @@ struct MessageRowModel: Equatable, Identifiable {
                 dayHeader: newDay ? item.meta.itemTs : nil,
                 endsRun: endsRun,
                 isGroup: isGroup,
-                userMemberId: userMemberId
+                userMemberId: ctx.membership?.memberId,
+                quoteSender: item.quotedItem.map { $0.getSender(ctx.membership) ?? ctx.chatName },
+                highlighted: item.id == ctx.highlightedItemId
             )
         }
     }
@@ -119,19 +139,44 @@ struct MessageRow: View {
                         .padding(.leading, 10)
                 }
                 bubble
+                    .contextMenu { contextMenu }
+                    .scaleEffect(model.highlighted ? 1.03 : 1)
+                    .shadow(color: .accentColor.opacity(model.highlighted ? 0.6 : 0), radius: 8)
+                    .animation(.spring(duration: 0.3), value: model.highlighted)
             }
             if !sent { Spacer(minLength: 60) }
         }
     }
 
+    @ViewBuilder
+    private var contextMenu: some View {
+        if model.canReply {
+            Button("Reply") { ChatStore.shared.replyTo = item }
+        }
+        Button("Copy") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(plainMessageText(item.text, item.formattedText), forType: .string)
+        }
+        .disabled(item.isDeletedContent)
+    }
+
     private var bubble: some View {
-        VStack(alignment: .trailing, spacing: 2) {
+        BubbleStack(spacing: 2) {
+            if let quote = item.quotedItem {
+                QuoteView(quote: quote, sender: model.quoteSender, onAccent: sent)
+                    .onTapGesture {
+                        if let id = quote.itemId { ChatStore.shared.jump(to: id) }
+                    }
+                    // A long quote truncates rather than widening the bubble past this.
+                    .layoutValue(key: BubbleStack.WidthCap.self, value: 300)
+            }
             Text(messageText)
                 .font(.body)
                 .textSelection(.enabled)
                 .foregroundStyle(sent ? Color.white : Color.primary)
                 .tint(sent ? .white : .accentColor)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.openURL, OpenURLAction { url in
                     if url.scheme == MessageLink.secretScheme, let i = url.host().flatMap(Int.init) {
                         revealedSecrets.formSymmetricDifference([i])
@@ -151,6 +196,7 @@ struct MessageRow: View {
             }
             .font(.caption2)
             .foregroundStyle(sent ? Color.white.opacity(0.75) : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 11)
         .padding(.vertical, 6)
@@ -184,5 +230,70 @@ struct MessageRow: View {
         case .sndWarning: "exclamationmark.triangle"
         default: nil
         }
+    }
+}
+
+/// Stacks bubble content vertically at the width of its widest child (up to the available width),
+/// and gives every child that width. So a quote fills the bubble without stretching it,
+/// and long text still wraps at the maximum bubble width.
+struct BubbleStack: Layout {
+    var spacing: CGFloat = 0
+
+    /// Limits how much a child's natural width can widen the bubble.
+    struct WidthCap: LayoutValueKey {
+        static let defaultValue: CGFloat = .infinity
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = contentWidth(proposal, subviews)
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: width, height: nil)).height }
+        return CGSize(width: width, height: heights.reduce(0, +) + spacing * CGFloat(max(0, subviews.count - 1)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for subview in subviews {
+            let p = ProposedViewSize(width: bounds.width, height: nil)
+            let h = subview.sizeThatFits(p).height
+            subview.place(at: CGPoint(x: bounds.minX, y: y), proposal: ProposedViewSize(width: bounds.width, height: h))
+            y += h + spacing
+        }
+    }
+
+    private func contentWidth(_ proposal: ProposedViewSize, _ subviews: Subviews) -> CGFloat {
+        let available = proposal.width ?? .infinity
+        let natural = subviews.map { min($0.sizeThatFits(.unspecified).width, $0[WidthCap.self]) }.max() ?? 0
+        return min(natural, available)
+    }
+}
+
+/// The quoted message shown at the top of a reply bubble, and above the message box while replying.
+struct QuoteView: View {
+    let quote: CIQuote
+    let sender: String?
+    var onAccent = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(onAccent ? Color.white.opacity(0.8) : Color.accentColor)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                if let sender {
+                    Text(sender)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(onAccent ? Color.white : Color.accentColor)
+                }
+                Text(plainMessageText(quote.text, quote.formattedText))
+                    .font(.callout)
+                    .lineLimit(2)
+                    .foregroundStyle(onAccent ? Color.white.opacity(0.85) : Color.secondary)
+            }
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(onAccent ? Color.white.opacity(0.18) : Color.primary.opacity(0.06)))
+        .contentShape(Rectangle())
     }
 }
