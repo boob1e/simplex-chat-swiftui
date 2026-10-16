@@ -11,3 +11,4 @@ FOUNDATION_EXPORT double SimpleXChatVersionNumber;
 FOUNDATION_EXPORT const unsigned char SimpleXChatVersionString[];
 
 #import <SimpleXChat/SimpleX.h>
+#import <SimpleXChat/hs_init_mac.h>

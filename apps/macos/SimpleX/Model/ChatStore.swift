@@ -51,7 +51,7 @@ final class ChatStore {
         canResetDatabase = false
         Task.detached(priority: .userInitiated) {
             if !Self.coreInitialized {
-                haskell_init()
+                haskell_init_mac()
                 registerGroupDefaults()
                 Self.coreInitialized = true
             }
@@ -104,6 +104,21 @@ final class ChatStore {
         logger.error("startup failed: \(message)")
         canResetDatabase = canReset
         phase = .failed(message)
+    }
+
+    /// Stops the chat and closes the database. Called off the main thread when the app quits.
+    nonisolated static func shutdown(chatRunning: Bool) {
+        guard hasChatCtrl() else { return }
+        if chatRunning {
+            do {
+                let r: ChatResponse0 = try chatSendCmdSync(.apiStopChat)
+                if case .chatStopped = r {} else { logger.error("apiStopChat: \(r.responseType)") }
+            } catch {
+                logger.error("apiStopChat: \(responseError(error))")
+            }
+        }
+        chatCloseStore()
+        logger.info("chat stopped, database closed")
     }
 
     /// Deletes the database, its files and keychain key, then starts over with a new database.

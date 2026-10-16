@@ -8,6 +8,7 @@ import SimpleXChat
 
 @main
 struct SimpleXApp: App {
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var store = ChatStore.shared
     @State private var showNewChat = false
 
