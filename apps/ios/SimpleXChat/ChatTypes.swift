@@ -5489,9 +5489,15 @@ public enum ReportReason: Hashable {
     }
 
     public var attrString: NSAttributedString {
+        #if os(macOS)
+        let descr = NSFontDescriptor.preferredFontDescriptor(forTextStyle: .body)
+        let font = NSFont(descriptor: descr.withSymbolicTraits(.italic), size: 0) ?? NSFont.systemFont(ofSize: 0)
+        #else
         let descr = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
+        let font = UIFont(descriptor: descr.withSymbolicTraits(.traitItalic) ?? descr, size: 0)
+        #endif
         return NSAttributedString(string: text.isEmpty ? self.text : "\(self.text): ", attributes: [
-            .font: UIFont(descriptor: descr.withSymbolicTraits(.traitItalic) ?? descr, size: 0),
+            .font: font,
             .foregroundColor: UIColor(Color.red)
         ])
     }

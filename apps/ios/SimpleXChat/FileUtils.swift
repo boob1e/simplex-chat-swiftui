@@ -9,7 +9,9 @@
 
 import Foundation
 import OSLog
+#if canImport(UIKit)
 import UIKit
+#endif
 
 let logger = Logger()
 

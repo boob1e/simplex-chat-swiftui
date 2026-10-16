@@ -1,0 +1,4 @@
+SimpleX.xcodeproj/
+Libraries/*
+!Libraries/.gitkeep
+build/
