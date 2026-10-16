@@ -22,6 +22,7 @@ struct MessageRowModel: Equatable, Identifiable {
     /// Who wrote the quoted message, when this message is a reply.
     let quoteSender: String?
     let highlighted: Bool
+    let reactionsEnabled: Bool
 
     var id: Int64 { item.id }
 
@@ -34,6 +35,8 @@ struct MessageRowModel: Equatable, Identifiable {
 
     struct Context {
         let isGroup: Bool
+        /// Reactions are allowed by the chat's preferences.
+        var reactionsEnabled = false
         let chatName: String
         let membership: GroupMember?
         let highlightedItemId: Int64?
@@ -63,7 +66,8 @@ struct MessageRowModel: Equatable, Identifiable {
                 isGroup: isGroup,
                 userMemberId: ctx.membership?.memberId,
                 quoteSender: item.quotedItem.map { $0.getSender(ctx.membership) ?? ctx.chatName },
-                highlighted: item.id == ctx.highlightedItemId
+                highlighted: item.id == ctx.highlightedItemId,
+                reactionsEnabled: ctx.reactionsEnabled
             )
         }
     }
@@ -143,6 +147,11 @@ struct MessageRow: View {
                     .scaleEffect(model.highlighted ? 1.03 : 1)
                     .shadow(color: .accentColor.opacity(model.highlighted ? 0.6 : 0), radius: 8)
                     .animation(.spring(duration: 0.3), value: model.highlighted)
+                if !item.reactions.isEmpty {
+                    ReactionPills(reactions: item.reactions, canToggle: model.reactionsEnabled) { reaction in
+                        ChatStore.shared.toggleReaction(reaction, on: item)
+                    }
+                }
             }
             if !sent { Spacer(minLength: 60) }
         }
@@ -150,6 +159,21 @@ struct MessageRow: View {
 
     @ViewBuilder
     private var contextMenu: some View {
+        if model.reactionsEnabled && model.canReply && (item.allowAddReaction || item.reactions.contains(where: \.userReacted)) {
+            ControlGroup {
+                ForEach(MREmojiChar.allCases, id: \.self) { emoji in
+                    let reaction = MsgReaction.emoji(emoji: emoji)
+                    let reacted = item.reactions.contains { $0.reaction == reaction && $0.userReacted }
+                    Button {
+                        ChatStore.shared.toggleReaction(reaction, on: item)
+                    } label: {
+                        Text(reaction.text)
+                    }
+                    .disabled(!reacted && !item.allowAddReaction)
+                }
+            }
+            .controlGroupStyle(.palette)
+        }
         if model.canReply {
             Button("Reply") { ChatStore.shared.replyTo = item }
         }
@@ -237,6 +261,37 @@ struct MessageRow: View {
         case .sndWarning: "exclamationmark.triangle"
         default: nil
         }
+    }
+}
+
+/// Reaction counts under a bubble. The user's own reactions are tinted, and clicking toggles them.
+struct ReactionPills: View {
+    let reactions: [CIReactionCount]
+    let canToggle: Bool
+    let toggle: (MsgReaction) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(reactions, id: \.reaction) { r in
+                Button { toggle(r.reaction) } label: {
+                    HStack(spacing: 3) {
+                        Text(r.reaction.text)
+                        if r.totalReacted > 1 {
+                            Text("\(r.totalReacted)").monospacedDigit()
+                        }
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(r.userReacted ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.07)))
+                    .overlay(Capsule().strokeBorder(r.userReacted ? Color.accentColor.opacity(0.7) : Color.clear))
+                }
+                .buttonStyle(.plain)
+                .disabled(!canToggle)
+                .help(r.userReacted ? "Remove your reaction" : "React with \(r.reaction.text)")
+            }
+        }
+        .padding(.horizontal, 4)
     }
 }
 

@@ -139,6 +139,12 @@ func apiDeleteItems(_ itemIds: [Int64], in chat: ChatInfo, mode: CIDeleteMode) a
     throw r.unexpected
 }
 
+func apiReaction(_ reaction: MsgReaction, add: Bool, to item: ChatItem, in chat: ChatInfo) async throws -> ChatItem {
+    let r: ChatResponse1 = try await chatSendCmd(.apiChatItemReaction(type: chat.chatType, id: chat.apiId, scope: nil, itemId: item.id, add: add, reaction: reaction))
+    if case let .chatItemReaction(_, _, reaction) = r { return reaction.chatReaction.chatItem }
+    throw r.unexpected
+}
+
 func apiChatRead(_ chat: ChatInfo) async throws {
     try await sendCommandOkResp(.apiChatRead(type: chat.chatType, id: chat.apiId, scope: nil))
 }

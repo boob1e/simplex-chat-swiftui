@@ -296,6 +296,21 @@ final class ChatStore {
         return false
     }
 
+    /// Adds the reaction, or removes it if the user already reacted with it.
+    func toggleReaction(_ reaction: MsgReaction, on item: ChatItem) {
+        guard let chat = selectedChat else { return }
+        let add = !item.reactions.contains { $0.reaction == reaction && $0.userReacted }
+        guard !add || item.allowAddReaction else { return }
+        Task {
+            do {
+                let updated = try await apiReaction(reaction, add: add, to: item, in: chat.chatInfo)
+                update(updated, in: chat.chatInfo)
+            } catch {
+                logger.error("apiChatItemReaction: \(responseError(error))")
+            }
+        }
+    }
+
     func delete(_ item: ChatItem, mode: CIDeleteMode) async throws {
         guard let chat = selectedChat else { return }
         let deletions = try await apiDeleteItems([item.id], in: chat.chatInfo, mode: mode)
@@ -382,6 +397,9 @@ final class ChatStore {
         case let .chatItemsDeleted(user, deletions, _):
             guard isCurrentUser(user) else { return }
             apply(deletions)
+        case let .chatItemReaction(user, _, r):
+            guard isCurrentUser(user) else { return }
+            update(r.chatReaction.chatItem, in: r.chatInfo)
         case let .contactConnected(user, contact, _):
             guard isCurrentUser(user), let currentUser else { return }
             updateInfo(.direct(contact: contact))

@@ -30,7 +30,9 @@ struct ConversationView: View {
     }
 
     private var rowContext: MessageRowModel.Context {
-        MessageRowModel.Context(isGroup: chat.chatInfo.chatType == .group, chatName: chat.chatInfo.chatViewName,
+        MessageRowModel.Context(isGroup: chat.chatInfo.chatType == .group,
+                                reactionsEnabled: chat.chatInfo.featureEnabled(.reactions),
+                                chatName: chat.chatInfo.chatViewName,
                                 membership: membership, highlightedItemId: store.highlightedItemId)
     }
 
