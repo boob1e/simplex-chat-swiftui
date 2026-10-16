@@ -55,7 +55,15 @@ final class ChatStore {
     private var loadingNewer = false
 
     /// The message being replied to in the open chat.
-    var replyTo: ChatItem?
+    var replyTo: ChatItem? {
+        didSet { if replyTo != nil { editing = nil } }
+    }
+    /// Own message being edited in the message box.
+    var editing: ChatItem? {
+        didSet { if editing != nil { replyTo = nil } }
+    }
+    /// Message waiting for delete confirmation.
+    var deleting: ChatItem?
     /// Asks the message list to scroll to an item, e.g. after clicking a quote.
     private(set) var scrollRequest: ScrollRequest?
     /// Briefly highlighted item, after jumping to it.
@@ -209,6 +217,8 @@ final class ChatStore {
         hasOlderItems = true
         hasNewerItems = false
         replyTo = nil
+        editing = nil
+        deleting = nil
         highlightedItemId = nil
         guard let chatId = selectedChatId else { return }
         Task {
@@ -262,11 +272,46 @@ final class ChatStore {
 
     func send(_ text: String) async throws {
         guard let chat = selectedChat else { return }
+        if let item = editing {
+            let updated = try await apiUpdateText(text, of: item, in: chat.chatInfo)
+            if editing?.id == item.id { editing = nil }
+            update(updated, in: chat.chatInfo)
+            return
+        }
         let quoted = replyTo
         let sent = try await apiSendText(text, to: chat.chatInfo, quotedItemId: quoted?.id)
         if replyTo?.id == quoted?.id { replyTo = nil }
         if hasNewerItems { await reloadLatest() }
         for item in sent { add(item, to: chat.chatInfo) }
+    }
+
+    /// Edits the user's most recent editable message (↑ in an empty message box).
+    func editLastMessage() {
+        if let item = items.last(where: { $0.chatDir.sent && Self.canEdit($0) }) { editing = item }
+    }
+
+    static func canEdit(_ item: ChatItem) -> Bool {
+        guard item.chatDir.sent, item.meta.editable, item.meta.itemDeleted == nil, !item.isDeletedContent else { return false }
+        if case .text = item.content.msgContent { return true }
+        return false
+    }
+
+    func delete(_ item: ChatItem, mode: CIDeleteMode) async throws {
+        guard let chat = selectedChat else { return }
+        let deletions = try await apiDeleteItems([item.id], in: chat.chatInfo, mode: mode)
+        if editing?.id == item.id { editing = nil }
+        if replyTo?.id == item.id { replyTo = nil }
+        apply(deletions)
+    }
+
+    private func apply(_ deletions: [ChatItemDeletion]) {
+        for d in deletions {
+            if let to = d.toChatItem {
+                update(to.chatItem, in: to.chatInfo)
+            } else {
+                remove(d.deletedChatItem.chatItem.id, from: d.deletedChatItem.chatInfo.id)
+            }
+        }
     }
 
     /// Scrolls to an item and highlights it, loading the history around it if it isn't loaded.
@@ -336,10 +381,7 @@ final class ChatStore {
             for a in aItems { update(a.chatItem, in: a.chatInfo) }
         case let .chatItemsDeleted(user, deletions, _):
             guard isCurrentUser(user) else { return }
-            for d in deletions {
-                if let to = d.toChatItem { update(to.chatItem, in: to.chatInfo) }
-                else { remove(d.deletedChatItem.chatItem.id, from: d.deletedChatItem.chatInfo.id) }
-            }
+            apply(deletions)
         case let .contactConnected(user, contact, _):
             guard isCurrentUser(user), let currentUser else { return }
             updateInfo(.direct(contact: contact))
@@ -400,6 +442,14 @@ final class ChatStore {
 
     private func remove(_ itemId: Int64, from chatId: ChatId) {
         if selectedChatId == chatId { items.removeAll { $0.id == itemId } }
+        // The chat list previews the last message, so it needs the one before it now.
+        if let i = chats.firstIndex(where: { $0.id == chatId }), chats[i].chatItems.last?.id == itemId {
+            if selectedChatId == chatId, let last = items.last {
+                chats[i].chatItems = [last]
+            } else {
+                scheduleReload()
+            }
+        }
     }
 
     private func updateInfo(_ info: ChatInfo) {

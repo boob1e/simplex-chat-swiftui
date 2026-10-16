@@ -153,11 +153,18 @@ struct MessageRow: View {
         if model.canReply {
             Button("Reply") { ChatStore.shared.replyTo = item }
         }
+        if ChatStore.canEdit(item) {
+            Button("Edit") { ChatStore.shared.editing = item }
+        }
         Button("Copy") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(plainMessageText(item.text, item.formattedText), forType: .string)
         }
         .disabled(item.isDeletedContent)
+        if item.canBeDeletedForSelf {
+            Divider()
+            Button("Delete…", role: .destructive) { ChatStore.shared.deleting = item }
+        }
     }
 
     private var bubble: some View {
@@ -208,7 +215,7 @@ struct MessageRow: View {
     }
 
     private var messageText: AttributedString {
-        if item.isDeletedContent {
+        if item.isDeletedContent || item.meta.itemDeleted != nil {
             var s = AttributedString(String(localized: "message deleted"))
             s.inlinePresentationIntent = .emphasized
             return s

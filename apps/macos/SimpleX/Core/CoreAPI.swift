@@ -121,6 +121,24 @@ func apiSendText(_ text: String, to chat: ChatInfo, quotedItemId: Int64? = nil) 
     throw r.unexpected
 }
 
+func apiUpdateText(_ text: String, of item: ChatItem, in chat: ChatInfo) async throws -> ChatItem {
+    let cmd: ChatCommand = .apiUpdateChatItem(
+        type: chat.chatType, id: chat.apiId, scope: nil, itemId: item.id,
+        updatedMessage: UpdatedMessage(msgContent: .text(text), mentions: [:]), live: false
+    )
+    let r: ChatResponse1 = try await chatSendCmd(cmd)
+    switch r {
+    case let .chatItemUpdated(_, a), let .chatItemNotChanged(_, a): return a.chatItem
+    default: throw r.unexpected
+    }
+}
+
+func apiDeleteItems(_ itemIds: [Int64], in chat: ChatInfo, mode: CIDeleteMode) async throws -> [ChatItemDeletion] {
+    let r: ChatResponse1 = try await chatSendCmd(.apiDeleteChatItem(type: chat.chatType, id: chat.apiId, scope: nil, itemIds: itemIds, mode: mode))
+    if case let .chatItemsDeleted(_, deletions, _) = r { return deletions }
+    throw r.unexpected
+}
+
 func apiChatRead(_ chat: ChatInfo) async throws {
     try await sendCommandOkResp(.apiChatRead(type: chat.chatType, id: chat.apiId, scope: nil))
 }
