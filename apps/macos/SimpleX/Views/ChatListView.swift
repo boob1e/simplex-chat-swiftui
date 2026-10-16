@@ -59,8 +59,8 @@ struct ChatRow: View {
     let chat: ChatData
 
     private var preview: String {
+        if PendingRequest(chat.chatInfo) != nil { return String(localized: "Wants to connect with you") }
         switch chat.chatInfo {
-        case .contactRequest: return String(localized: "Wants to connect with you")
         case .contactConnection: return String(localized: "Waiting for connection…")
         default:
             guard let item = chat.chatItems.last else { return "" }

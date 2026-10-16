@@ -16,6 +16,16 @@ struct MainView: View {
             ChatListView(selection: $store.selectedChatId)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
                 .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button { store.showProfile = true } label: {
+                            if let user = store.currentUser {
+                                AvatarView(image: user.image, name: user.displayName, size: 22)
+                            } else {
+                                Image(systemName: "person.crop.circle")
+                            }
+                        }
+                        .help("Your profile and SimpleX address (⇧⌘P)")
+                    }
                     ToolbarItem {
                         Button { showNewChat = true } label: {
                             Label("New Chat", systemImage: "square.and.pencil")
@@ -34,6 +44,9 @@ struct MainView: View {
         }
         .sheet(isPresented: $showNewChat) {
             NewChatSheet()
+        }
+        .sheet(isPresented: $store.showProfile) {
+            ProfileView()
         }
         .sheet(item: $store.pendingConnectLink) { link in
             NewChatSheet(initialLink: link.uri)

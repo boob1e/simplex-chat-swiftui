@@ -165,6 +165,59 @@ func apiAddContact(userId: Int64) async throws -> (CreatedConnLink, PendingConta
     throw r.unexpected
 }
 
+// MARK: - SimpleX address and contact requests
+
+/// A contact request waiting for the user. Newer cores attach requests to a contact
+/// (`Contact.contactRequestId`); older ones use a separate contact request chat.
+struct PendingRequest {
+    let requestId: Int64
+    let chatId: ChatId
+    let name: String
+
+    init?(_ info: ChatInfo) {
+        switch info {
+        case let .contactRequest(r): (requestId, chatId, name) = (r.apiId, r.id, r.chatViewName)
+        case let .direct(c):
+            guard let id = c.contactRequestId else { return nil }
+            (requestId, chatId, name) = (id, c.id, c.chatViewName)
+        default: return nil
+        }
+    }
+}
+
+func apiShowMyAddress(userId: Int64) async throws -> UserContactLink? {
+    let r: APIResult<ChatResponse1> = await chatApiSendCmd(.apiShowMyAddress(userId: userId))
+    switch r {
+    case let .result(.userContactLink(_, contactLink)): return contactLink
+    case .error(.errorStore(storeError: .userContactLinkNotFound)): return nil
+    default: throw r.unexpected
+    }
+}
+
+func apiCreateMyAddress(userId: Int64) async throws -> CreatedConnLink {
+    let r: ChatResponse1 = try await chatSendCmd(.apiCreateMyAddress(userId: userId))
+    if case let .userContactLinkCreated(_, link) = r { return link }
+    throw r.unexpected
+}
+
+func apiDeleteMyAddress(userId: Int64) async throws {
+    let r: ChatResponse1 = try await chatSendCmd(.apiDeleteMyAddress(userId: userId))
+    if case .userContactLinkDeleted = r { return }
+    throw r.unexpected
+}
+
+func apiAcceptContactRequest(_ contactReqId: Int64) async throws -> Contact {
+    let r: ChatResponse1 = try await chatSendCmd(.apiAcceptContact(incognito: false, contactReqId: contactReqId))
+    if case let .acceptingContactRequest(_, contact) = r { return contact }
+    throw r.unexpected
+}
+
+func apiRejectContactRequest(_ contactReqId: Int64) async throws {
+    let r: ChatResponse1 = try await chatSendCmd(.apiRejectContact(contactReqId: contactReqId))
+    if case .contactRequestRejected = r { return }
+    throw r.unexpected
+}
+
 enum ConnectResult {
     case connecting
     case alreadyConnected(Contact)

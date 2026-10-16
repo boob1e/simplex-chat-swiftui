@@ -74,7 +74,6 @@ struct NewChatSheet: View {
     }
 
     @State private var mode: Mode
-    @State private var invitation: String?
     @State private var link: String
 
     init(initialLink: String? = nil) {
@@ -93,7 +92,7 @@ struct NewChatSheet: View {
             .labelsHidden()
 
             switch mode {
-            case .invite: inviteView
+            case .invite: OneTimeLinkTab()
             case .connect: connectView
             }
 
@@ -109,38 +108,6 @@ struct NewChatSheet: View {
         }
         .padding(20)
         .frame(width: 460)
-    }
-
-    private var inviteView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Share a one-time link with the person you want to talk to. It works once.")
-                .foregroundStyle(.secondary)
-            if let invitation {
-                Text(invitation)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(4)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
-                HStack {
-                    Button("Copy Link") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(invitation, forType: .string)
-                        status = String(localized: "Copied to clipboard.")
-                    }
-                    ShareLink(item: invitation)
-                }
-            } else {
-                Button {
-                    createInvitation()
-                } label: {
-                    if working { ProgressView().controlSize(.small) } else { Text("Create One-Time Link") }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(working)
-            }
-        }
     }
 
     private var connectView: some View {
@@ -161,22 +128,6 @@ struct NewChatSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || working)
-            }
-        }
-    }
-
-    private func createInvitation() {
-        guard let userId = store.currentUser?.userId else { return }
-        working = true
-        status = nil
-        Task {
-            defer { working = false }
-            do {
-                let (link, _) = try await apiAddContact(userId: userId)
-                invitation = link.simplexChatUri(short: true)
-                try? await store.reloadChats()
-            } catch {
-                status = responseError(error)
             }
         }
     }

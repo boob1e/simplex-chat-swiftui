@@ -43,10 +43,14 @@ struct ConversationView: View {
                         onReachTop: { store.loadOlderItems() },
                         onReachBottom: { store.loadNewerItems() })
             Divider()
-            ComposeBar(enabled: chat.chatInfo.sendMsgEnabled, replyTo: $store.replyTo, editing: $store.editing,
-                       replySender: { $0.chatDir.sent ? String(localized: "you") : ($0.memberDisplayName ?? chat.chatInfo.chatViewName) },
-                       onEditLast: { store.editLastMessage() }) { text in
-                try await store.send(text)
+            if let request = PendingRequest(chat.chatInfo) {
+                ContactRequestBar(request: request)
+            } else {
+                ComposeBar(enabled: chat.chatInfo.sendMsgEnabled, replyTo: $store.replyTo, editing: $store.editing,
+                           replySender: { $0.chatDir.sent ? String(localized: "you") : ($0.memberDisplayName ?? chat.chatInfo.chatViewName) },
+                           onEditLast: { store.editLastMessage() }) { text in
+                    try await store.send(text)
+                }
             }
         }
         .navigationTitle(chat.chatInfo.chatViewName)
@@ -206,6 +210,43 @@ struct ComposeBar: View {
                 text = msg
                 self.error = responseError(error)
             }
+        }
+    }
+}
+
+/// Shown instead of the message box for a contact request.
+struct ContactRequestBar: View {
+    @Environment(ChatStore.self) private var store
+    let request: PendingRequest
+    @State private var working = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("\(request.name) wants to connect with you.")
+                .font(.callout)
+            HStack {
+                Button("Reject", role: .destructive) { run { try await store.rejectContactRequest(request) } }
+                Button("Accept") { run { try await store.acceptContactRequest(request) } }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .disabled(working)
+            if let error {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(14)
+        .background(.bar)
+    }
+
+    private func run(_ action: @escaping () async throws -> Void) {
+        working = true
+        error = nil
+        Task {
+            defer { working = false }
+            do { try await action() } catch { self.error = responseError(error) }
         }
     }
 }

@@ -80,6 +80,8 @@ final class ChatStore {
         return chats.first { $0.id == selectedChatId }
     }
 
+    var showProfile = false
+
     /// A SimpleX link to connect to, from a message or opened from another app. Shows the New Chat sheet.
     var pendingConnectLink: PendingLink?
 
@@ -202,6 +204,18 @@ final class ChatStore {
 
     private static func sorted(_ chats: [ChatData]) -> [ChatData] {
         chats.sorted { $0.chatInfo.chatTs > $1.chatInfo.chatTs }
+    }
+
+    func acceptContactRequest(_ request: PendingRequest) async throws {
+        let contact = try await apiAcceptContactRequest(request.requestId)
+        try? await reloadChats()
+        selectedChatId = contact.id
+    }
+
+    func rejectContactRequest(_ request: PendingRequest) async throws {
+        try await apiRejectContactRequest(request.requestId)
+        chats.removeAll { $0.id == request.chatId }
+        if selectedChatId == request.chatId { selectedChatId = nil }
     }
 
     func deleteChat(_ chat: ChatData) async throws {

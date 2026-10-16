@@ -31,6 +31,9 @@ struct SimpleXApp: App {
                 Button("New Chat…") { showNewChat = true }
                     .keyboardShortcut("n")
                     .disabled(store.phase != .running)
+                Button("My Profile and Address…") { store.showProfile = true }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .disabled(store.phase != .running)
             }
         }
 
