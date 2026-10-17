@@ -112,9 +112,13 @@ func apiGetChat(chatId: ChatId, pagination: ChatPagination) async throws -> Chat
 }
 
 func apiSendText(_ text: String, to chat: ChatInfo, quotedItemId: Int64? = nil) async throws -> [ChatItem] {
+    try await apiSendMessages([ComposedMessage(quotedItemId: quotedItemId, msgContent: .text(text))], to: chat)
+}
+
+func apiSendMessages(_ messages: [ComposedMessage], to chat: ChatInfo) async throws -> [ChatItem] {
     let cmd: ChatCommand = .apiSendMessages(
         type: chat.chatType, id: chat.apiId, scope: nil, sendAsGroup: false, live: false, ttl: nil, sign: false,
-        composedMessages: [ComposedMessage(quotedItemId: quotedItemId, msgContent: .text(text))]
+        composedMessages: messages
     )
     let r: ChatResponse1 = try await chatSendCmd(cmd)
     if case let .newChatItems(_, items) = r { return items.map(\.chatItem) }
@@ -143,6 +147,34 @@ func apiReaction(_ reaction: MsgReaction, add: Bool, to item: ChatItem, in chat:
     let r: ChatResponse1 = try await chatSendCmd(.apiChatItemReaction(type: chat.chatType, id: chat.apiId, scope: nil, itemId: item.id, add: add, reaction: reaction))
     if case let .chatItemReaction(_, _, reaction) = r { return reaction.chatReaction.chatItem }
     throw r.unexpected
+}
+
+enum ReceiveFileResult {
+    case accepted(AChatItem)
+    /// The file is on relays the user hasn't approved; they can see the user's IP address.
+    case needsApproval(servers: [String])
+}
+
+func apiReceiveFile(_ fileId: Int64, approvedRelays: Bool) async throws -> ReceiveFileResult {
+    let r: APIResult<ChatResponse2> = await chatApiSendCmd(.receiveFile(
+        fileId: fileId,
+        userApprovedRelays: approvedRelays || !privacyAskToApproveRelaysGroupDefault.get(),
+        encrypted: privacyEncryptLocalFilesGroupDefault.get(),
+        inline: nil
+    ))
+    switch r {
+    case let .result(.rcvFileAccepted(_, item)): return .accepted(item)
+    case let .error(.error(.fileNotApproved(_, servers))): return .needsApproval(servers: servers)
+    default: throw r.unexpected
+    }
+}
+
+func apiCancelFile(_ fileId: Int64) async throws -> AChatItem? {
+    let r: ChatResponse2 = try await chatSendCmd(.cancelFile(fileId: fileId))
+    switch r {
+    case let .sndFileCancelled(_, item, _, _), let .rcvFileCancelled(_, item, _): return item
+    default: throw r.unexpected
+    }
 }
 
 func apiChatRead(_ chat: ChatInfo) async throws {
@@ -178,7 +210,8 @@ struct PendingRequest {
         switch info {
         case let .contactRequest(r): (requestId, chatId, name) = (r.apiId, r.id, r.chatViewName)
         case let .direct(c):
-            guard let id = c.contactRequestId else { return nil }
+            // Same condition as iOS: contactRequestId stays set after accepting, but the connection moves on.
+            guard c.nextAcceptContactRequest, let id = c.contactRequestId else { return nil }
             (requestId, chatId, name) = (id, c.id, c.chatViewName)
         default: return nil
         }

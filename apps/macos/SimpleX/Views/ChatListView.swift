@@ -64,7 +64,15 @@ struct ChatRow: View {
         case .contactConnection: return String(localized: "Waiting for connection…")
         default:
             guard let item = chat.chatItems.last else { return "" }
-            return plainMessageText(item.text, item.formattedText)
+            let text = plainMessageText(item.text, item.formattedText)
+            if text.isEmpty, let file = item.file {
+                switch item.content.msgContent {
+                case .image: return String(localized: "Image")
+                case .video: return String(localized: "Video")
+                default: return file.fileName
+                }
+            }
+            return text
         }
     }
 

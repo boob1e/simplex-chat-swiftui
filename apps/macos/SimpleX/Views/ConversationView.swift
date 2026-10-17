@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SimpleXChat
+import QuickLook
 
 struct ConversationView: View {
     @Environment(ChatStore.self) private var store
@@ -47,6 +48,8 @@ struct ConversationView: View {
                 ContactRequestBar(request: request)
             } else {
                 ComposeBar(enabled: chat.chatInfo.sendMsgEnabled, replyTo: $store.replyTo, editing: $store.editing,
+                           attachments: $store.attachments,
+                           filesAllowed: chat.chatInfo.featureEnabled(.files),
                            replySender: { $0.chatDir.sent ? String(localized: "you") : ($0.memberDisplayName ?? chat.chatInfo.chatViewName) },
                            onEditLast: { store.editLastMessage() }) { text in
                     try await store.send(text)
@@ -56,6 +59,27 @@ struct ConversationView: View {
         .navigationTitle(chat.chatInfo.chatViewName)
         .navigationSubtitle(subtitle)
         .background(Color(nsColor: .textBackgroundColor))
+        .quickLookPreview($store.quickLookURL)
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
+            guard chat.chatInfo.sendMsgEnabled, chat.chatInfo.featureEnabled(.files), store.editing == nil else { return false }
+            addAttachments(from: providers)
+            return true
+        }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8, 6]))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+        .alert("Download from unknown servers?", isPresented: Binding(get: { store.fileApproval != nil }, set: { if !$0 { store.fileApproval = nil } }),
+               presenting: store.fileApproval) { approval in
+            Button("Download") { store.approveFileRelays(approval) }
+            Button("Cancel", role: .cancel) {}
+        } message: { approval in
+            Text("This file is on relays you haven't approved: \(approval.servers.map(serverHostname).joined(separator: ", ")). Without Tor or a VPN, they can see your IP address.")
+        }
         .confirmationDialog("Delete message?", isPresented: Binding(get: { store.deleting != nil }, set: { if !$0 { store.deleting = nil } }),
                             titleVisibility: .visible, presenting: store.deleting) { item in
             Button("Delete for Me", role: .destructive) { delete(item, .cidmInternal) }
@@ -75,6 +99,23 @@ struct ConversationView: View {
     }
 
     @State private var deleteError: String?
+    @State private var dropTargeted = false
+
+    private func addAttachments(from providers: [NSItemProvider]) {
+        for provider in providers {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, let a = Attachment.fromTransferred(url: url) else { return }
+                    Task { @MainActor in store.attachments.append(a) }
+                }
+            } else if provider.canLoadObject(ofClass: NSImage.self) {
+                _ = provider.loadObject(ofClass: NSImage.self) { image, _ in
+                    guard let image = image as? NSImage else { return }
+                    Task { @MainActor in store.attachments.append(.from(image: image)) }
+                }
+            }
+        }
+    }
 
     private func delete(_ item: ChatItem, _ mode: CIDeleteMode) {
         Task {
@@ -91,6 +132,8 @@ struct ComposeBar: View {
     let enabled: Bool
     @Binding var replyTo: ChatItem?
     @Binding var editing: ChatItem?
+    @Binding var attachments: [Attachment]
+    let filesAllowed: Bool
     let replySender: (ChatItem) -> String
     let onEditLast: () -> Void
     let send: (String) async throws -> Void
@@ -103,6 +146,7 @@ struct ComposeBar: View {
     @FocusState private var focused: Bool
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSend: Bool { !(trimmed.isEmpty && (attachments.isEmpty || editing != nil)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -111,6 +155,9 @@ struct ComposeBar: View {
             } else if let replyTo {
                 strip(icon: "arrowshape.turn.up.left.fill", title: "Replying to \(replySender(replyTo))", item: replyTo,
                       cancelHelp: "Cancel reply (Esc)") { self.replyTo = nil }
+            }
+            if !attachments.isEmpty && editing == nil {
+                AttachmentStrip(attachments: $attachments)
             }
             inputRow
         }
@@ -168,12 +215,24 @@ struct ComposeBar: View {
 
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button(action: chooseFiles) {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 17))
+                    .frame(height: 30)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .disabled(!enabled || !filesAllowed || editing != nil)
+            .help(filesAllowed ? "Attach images or files" : "This contact doesn't accept files")
             TextField(enabled ? "Message" : "You can't send messages yet", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...8)
                 .focused($focused)
                 .disabled(!enabled)
                 .onSubmit(submit)
+                .onPasteCommand(of: [.fileURL, .png, .tiff, .image]) { providers in
+                    pasteAttachments(providers)
+                }
                 .onKeyPress(.upArrow) {
                     guard text.isEmpty, editing == nil else { return .ignored }
                     onEditLast()
@@ -189,17 +248,44 @@ struct ComposeBar: View {
                     .symbolRenderingMode(.hierarchical)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(trimmed.isEmpty ? Color.secondary : Color.accentColor)
-            .disabled(trimmed.isEmpty || sending || !enabled)
+            .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
+            .disabled(!canSend || sending || !enabled)
             .keyboardShortcut(.return, modifiers: .command)
             .help(editing == nil ? "Send (Return)" : "Save (Return)")
         }
     }
 
     /// Return sends; Option-Return inserts a newline (handled by the vertical TextField).
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = String(localized: "Choose images or files to send")
+        guard panel.runModal() == .OK else { return }
+        attachments += panel.urls.compactMap(Attachment.from(url:))
+        focused = true
+    }
+
+    private func pasteAttachments(_ providers: [NSItemProvider]) {
+        guard filesAllowed, editing == nil else { return }
+        for provider in providers {
+            if provider.canLoadObject(ofClass: URL.self) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url, let a = Attachment.fromTransferred(url: url) else { return }
+                    Task { @MainActor in attachments.append(a) }
+                }
+            } else if provider.canLoadObject(ofClass: NSImage.self) {
+                _ = provider.loadObject(ofClass: NSImage.self) { image, _ in
+                    guard let image = image as? NSImage else { return }
+                    Task { @MainActor in attachments.append(.from(image: image)) }
+                }
+            }
+        }
+    }
+
     private func submit() {
         let msg = trimmed
-        guard !msg.isEmpty, !sending, enabled else { return }
+        guard canSend, !sending, enabled else { return }
         sending = true
         text = ""
         Task {

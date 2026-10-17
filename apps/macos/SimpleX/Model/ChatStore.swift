@@ -64,6 +64,18 @@ final class ChatStore {
     }
     /// Message waiting for delete confirmation.
     var deleting: ChatItem?
+    /// Images and files to send with the next message.
+    var attachments: [Attachment] = []
+    /// A download that needs the user to approve unknown file relays.
+    var fileApproval: FileApproval?
+    /// File shown in Quick Look.
+    var quickLookURL: URL?
+
+    struct FileApproval: Identifiable {
+        let fileId: Int64
+        let servers: [String]
+        var id: Int64 { fileId }
+    }
     /// Asks the message list to scroll to an item, e.g. after clicking a quote.
     private(set) var scrollRequest: ScrollRequest?
     /// Briefly highlighted item, after jumping to it.
@@ -173,6 +185,7 @@ final class ChatStore {
             }
         }
         chatCloseStore()
+        removeDecryptedCopies()
         logger.info("chat stopped, database closed")
     }
 
@@ -233,6 +246,7 @@ final class ChatStore {
         replyTo = nil
         editing = nil
         deleting = nil
+        attachments = []
         highlightedItemId = nil
         guard let chatId = selectedChatId else { return }
         Task {
@@ -293,10 +307,73 @@ final class ChatStore {
             return
         }
         let quoted = replyTo
-        let sent = try await apiSendText(text, to: chat.chatInfo, quotedItemId: quoted?.id)
+        let sent: [ChatItem]
+        if attachments.isEmpty {
+            sent = try await apiSendText(text, to: chat.chatInfo, quotedItemId: quoted?.id)
+        } else {
+            let toSend = attachments
+            // Encoding and encrypting files is slow, so it happens off the main thread.
+            let messages = try await Task.detached(priority: .userInitiated) {
+                try toSend.enumerated().map { i, attachment in
+                    let (content, file) = try prepareForSending(attachment, caption: i == toSend.count - 1 ? text : "")
+                    return ComposedMessage(fileSource: file, quotedItemId: i == 0 ? quoted?.id : nil, msgContent: content)
+                }
+            }.value
+            sent = try await apiSendMessages(messages, to: chat.chatInfo)
+            attachments.removeAll { a in toSend.contains { $0.id == a.id } }
+        }
         if replyTo?.id == quoted?.id { replyTo = nil }
         if hasNewerItems { await reloadLatest() }
         for item in sent { add(item, to: chat.chatInfo) }
+    }
+
+    // MARK: Files
+
+    /// Downloads a file. Automatic downloads (small images) silently skip files on unapproved relays.
+    func receiveFile(_ file: CIFile, approvedRelays: Bool = false, auto: Bool = false) {
+        Task {
+            do {
+                switch try await apiReceiveFile(file.fileId, approvedRelays: approvedRelays) {
+                case let .accepted(a): update(a.chatItem, in: a.chatInfo)
+                case let .needsApproval(servers): if !auto { fileApproval = FileApproval(fileId: file.fileId, servers: servers) }
+                }
+            } catch {
+                logger.error("receiveFile \(file.fileId): \(responseError(error))")
+            }
+        }
+    }
+
+    func approveFileRelays(_ approval: FileApproval) {
+        guard let item = items.first(where: { $0.file?.fileId == approval.fileId }), let file = item.file else { return }
+        receiveFile(file, approvedRelays: true)
+    }
+
+    func cancelFile(_ file: CIFile) {
+        Task {
+            do {
+                if let a = try await apiCancelFile(file.fileId) { update(a.chatItem, in: a.chatInfo) }
+            } catch {
+                logger.error("cancelFile \(file.fileId): \(responseError(error))")
+            }
+        }
+    }
+
+    func quickLook(_ item: ChatItem) {
+        quickLookURL = readableFileURL(item.file)
+    }
+
+    func saveFileAs(_ item: ChatItem) {
+        guard let file = item.file, let url = readableFileURL(file) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = file.fileName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.removeItem(at: dest) }
+            try FileManager.default.copyItem(at: url, to: dest)
+        } catch {
+            logger.error("saving file: \(error.localizedDescription)")
+        }
     }
 
     /// Edits the user's most recent editable message (↑ in an empty message box).
@@ -318,6 +395,7 @@ final class ChatStore {
         Task {
             do {
                 let updated = try await apiReaction(reaction, add: add, to: item, in: chat.chatInfo)
+                logger.notice("reaction \(add ? "added" : "removed", privacy: .public) on item \(item.id): core returned \(updated.reactions.count) reaction kinds, \(updated.reactions.filter(\.userReacted).count) by user; item loaded: \(self.items.contains { $0.id == updated.id })")
                 update(updated, in: chat.chatInfo)
             } catch {
                 logger.error("apiChatItemReaction: \(responseError(error))")
@@ -401,6 +479,7 @@ final class ChatStore {
             for a in aItems {
                 add(a.chatItem, to: a.chatInfo)
                 NotificationManager.shared.notifyMessage(currentUser, a.chatInfo, a.chatItem)
+                if let file = a.chatItem.autoReceiveFile() { receiveFile(file, auto: true) }
             }
         case let .chatItemUpdated(user, a):
             guard isCurrentUser(user) else { return }
@@ -411,6 +490,16 @@ final class ChatStore {
         case let .chatItemsDeleted(user, deletions, _):
             guard isCurrentUser(user) else { return }
             apply(deletions)
+        case let .rcvFileAccepted(user, a), let .rcvFileStart(user, a), let .rcvFileComplete(user, a),
+             let .rcvFileSndCancelled(user, a, _), let .sndFileStart(user, a, _), let .sndFileComplete(user, a, _),
+             let .sndFileCompleteXFTP(user, a, _):
+            guard isCurrentUser(user) else { return }
+            update(a.chatItem, in: a.chatInfo)
+        case let .rcvFileProgressXFTP(user, a?, _, _, _), let .rcvFileError(user, a?, _, _), let .rcvFileWarning(user, a?, _, _),
+             let .sndFileProgressXFTP(user, a?, _, _, _), let .sndFileError(user, a?, _, _), let .sndFileWarning(user, a?, _, _),
+             let .sndFileRcvCancelled(user, a?, _):
+            guard isCurrentUser(user) else { return }
+            update(a.chatItem, in: a.chatInfo)
         case let .chatItemReaction(user, _, r):
             guard isCurrentUser(user) else { return }
             update(r.chatReaction.chatItem, in: r.chatInfo)

@@ -151,8 +151,10 @@ struct MessageRow: View {
                     ReactionPills(reactions: item.reactions, canToggle: model.reactionsEnabled) { reaction in
                         ChatStore.shared.toggleReaction(reaction, on: item)
                     }
+                    .frame(maxWidth: 560, alignment: sent ? .trailing : .leading)
                 }
             }
+            .layoutPriority(1)
             if !sent { Spacer(minLength: 60) }
         }
     }
@@ -160,25 +162,27 @@ struct MessageRow: View {
     @ViewBuilder
     private var contextMenu: some View {
         if model.reactionsEnabled && model.canReply && (item.allowAddReaction || item.reactions.contains(where: \.userReacted)) {
-            ControlGroup {
+            Menu("React") {
                 ForEach(MREmojiChar.allCases, id: \.self) { emoji in
                     let reaction = MsgReaction.emoji(emoji: emoji)
                     let reacted = item.reactions.contains { $0.reaction == reaction && $0.userReacted }
-                    Button {
-                        ChatStore.shared.toggleReaction(reaction, on: item)
-                    } label: {
+                    Toggle(isOn: Binding(get: { reacted }, set: { _ in ChatStore.shared.toggleReaction(reaction, on: item) })) {
                         Text(reaction.text)
                     }
                     .disabled(!reacted && !item.allowAddReaction)
                 }
             }
-            .controlGroupStyle(.palette)
+            Divider()
         }
         if model.canReply {
             Button("Reply") { ChatStore.shared.replyTo = item }
         }
         if ChatStore.canEdit(item) {
             Button("Edit") { ChatStore.shared.editing = item }
+        }
+        if let file = item.file, !isDeleted, loadedFileSource(file) != nil {
+            Button("Quick Look") { ChatStore.shared.quickLook(item) }
+            Button("Save As…") { ChatStore.shared.saveFileAs(item) }
         }
         Button("Copy") {
             NSPasteboard.general.clearContents()
@@ -201,25 +205,32 @@ struct MessageRow: View {
                     // A long quote truncates rather than widening the bubble past this.
                     .layoutValue(key: BubbleStack.WidthCap.self, value: 300)
             }
-            Text(messageText)
-                .font(.body)
-                .textSelection(.enabled)
-                .foregroundStyle(sent ? Color.white : Color.primary)
-                .tint(sent ? .white : .accentColor)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .environment(\.openURL, OpenURLAction { url in
-                    if url.scheme == MessageLink.secretScheme, let i = url.host().flatMap(Int.init) {
-                        revealedSecrets.formSymmetricDifference([i])
+            if !isDeleted, let file = item.file {
+                attachmentView(file)
+                    .padding(.top, item.quotedItem == nil ? 2 : 4)
+                    .padding(.bottom, hasCaption ? 4 : 0)
+            }
+            if hasCaption || isDeleted || item.file == nil {
+                Text(messageText)
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .foregroundStyle(sent ? Color.white : Color.primary)
+                    .tint(sent ? .white : .accentColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        if url.scheme == MessageLink.secretScheme, let i = url.host().flatMap(Int.init) {
+                            revealedSecrets.formSymmetricDifference([i])
+                            return .handled
+                        }
+                        if let uri = MessageLink.connectUri(url) {
+                            ChatStore.shared.pendingConnectLink = .init(uri: uri)
+                            return .handled
+                        }
+                        openURL(url)
                         return .handled
-                    }
-                    if let uri = MessageLink.connectUri(url) {
-                        ChatStore.shared.pendingConnectLink = .init(uri: uri)
-                        return .handled
-                    }
-                    openURL(url)
-                    return .handled
-                })
+                    })
+            }
             HStack(spacing: 3) {
                 if item.meta.itemEdited { Text("edited") }
                 Text(item.meta.itemTs, format: .dateTime.hour().minute())
@@ -238,8 +249,24 @@ struct MessageRow: View {
         .frame(maxWidth: 560, alignment: sent ? .trailing : .leading)
     }
 
+    private var isDeleted: Bool { item.isDeletedContent || item.meta.itemDeleted != nil }
+
+    private var hasCaption: Bool { !(item.content.msgContent?.text ?? item.text).isEmpty }
+
+    @ViewBuilder
+    private func attachmentView(_ file: CIFile) -> some View {
+        switch item.content.msgContent {
+        case let .image(_, preview):
+            MessageMediaView(item: item, file: file, preview: preview)
+        case let .video(_, preview, _):
+            MessageMediaView(item: item, file: file, preview: preview, isVideo: true)
+        default:
+            FileRowView(item: item, file: file, onAccent: sent)
+        }
+    }
+
     private var messageText: AttributedString {
-        if item.isDeletedContent || item.meta.itemDeleted != nil {
+        if isDeleted {
             var s = AttributedString(String(localized: "message deleted"))
             s.inlinePresentationIntent = .emphasized
             return s
@@ -271,7 +298,7 @@ struct ReactionPills: View {
     let toggle: (MsgReaction) -> Void
 
     var body: some View {
-        HStack(spacing: 4) {
+        FlowLayout(spacing: 4) {
             ForEach(reactions, id: \.reaction) { r in
                 Button { toggle(r.reaction) } label: {
                     HStack(spacing: 3) {
@@ -289,9 +316,60 @@ struct ReactionPills: View {
                 .buttonStyle(.plain)
                 .disabled(!canToggle)
                 .help(r.userReacted ? "Remove your reaction" : "React with \(r.reaction.text)")
+                .fixedSize()
             }
         }
         .padding(.horizontal, 4)
+    }
+}
+
+/// Lays children out left to right, wrapping to a new line when the available width runs out.
+/// Unlike an HStack it never squeezes children, so a short bubble can't hide reactions.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, maxWidth: proposal.width ?? .infinity)
+        let width = rows.map(\.width).max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(subviews, maxWidth: bounds.width) {
+            var x = bounds.minX
+            for i in row.indices {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private struct Row {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, maxWidth: CGFloat) -> [Row] {
+        var rows: [Row] = []
+        var row = Row()
+        for (i, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            let needed = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty && needed > maxWidth {
+                rows.append(row)
+                row = Row()
+            }
+            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            row.height = max(row.height, size.height)
+            row.indices.append(i)
+        }
+        if !row.indices.isEmpty { rows.append(row) }
+        return rows
     }
 }
 

@@ -132,7 +132,16 @@ struct MessageList: NSViewRepresentable {
             let changed = IndexSet((0..<count).filter { rows[$0] != old[$0] })
             guard !changed.isEmpty else { return }
             table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
-            table.noteHeightOfRows(withIndexesChanged: changed)
+            // The hosted SwiftUI rows only report their new size after their next layout pass,
+            // so measure on the next turn of the run loop; measuring now gets the old height.
+            DispatchQueue.main.async { [weak table] in
+                guard let table else { return }
+                let rows = IndexSet(changed.filter { $0 < table.numberOfRows })
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.15
+                    table.noteHeightOfRows(withIndexesChanged: rows)
+                }
+            }
         }
 
         private var isAtBottom: Bool {
@@ -213,6 +222,7 @@ final class HostingCell: NSTableCellView {
 
     func set(_ row: MessageRow) {
         host.rootView = AnyView(row)
+        host.invalidateIntrinsicContentSize()
         resetSwipe()
     }
 
