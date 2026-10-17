@@ -31,6 +31,8 @@ struct ChatListView: View {
             ChatRow(chat: chat)
                 .tag(chat.id)
                 .contextMenu {
+                    ChatOptionsMenuItems(chat: chat)
+                    Divider()
                     Button("Delete Chat…", role: .destructive) { chatToDelete = chat }
                 }
         }
@@ -84,6 +86,12 @@ struct ChatRow: View {
                     Text(chat.chatInfo.chatViewName)
                         .font(.headline)
                         .lineLimit(1)
+                    if chat.chatInfo.isMuted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help(chat.chatInfo.chatSettings?.enableNtfs == .mentions ? "Notifications for mentions only" : "Notifications off")
+                    }
                     Spacer(minLength: 4)
                     if let ts = chat.chatItems.last?.meta.itemTs {
                         Text(ts, format: Date.relativeChatFormat(ts))
@@ -98,7 +106,7 @@ struct ChatRow: View {
                         .lineLimit(2)
                     Spacer(minLength: 4)
                     if chat.chatStats.unreadCount > 0 || chat.chatStats.unreadChat {
-                        UnreadBadge(count: chat.chatStats.unreadCount)
+                        UnreadBadge(count: chat.chatStats.unreadCount, muted: chat.chatInfo.isMuted)
                     }
                 }
             }
@@ -109,6 +117,7 @@ struct ChatRow: View {
 
 struct UnreadBadge: View {
     let count: Int
+    var muted = false
 
     var body: some View {
         Text(count > 0 ? (count > 999 ? "999+" : "\(count)") : " ")
@@ -117,7 +126,7 @@ struct UnreadBadge: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .frame(minWidth: 18)
-            .background(Capsule().fill(.tint))
+            .background(Capsule().fill(muted ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint)))
     }
 }
 

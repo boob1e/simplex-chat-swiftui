@@ -189,6 +189,17 @@ func apiDeleteChat(_ chat: ChatInfo) async throws {
     }
 }
 
+func apiSetChatSettings(_ chat: ChatInfo, _ settings: ChatSettings) async throws {
+    try await sendCommandOkResp(.apiSetChatSettings(type: chat.chatType, id: chat.apiId, chatSettings: settings))
+}
+
+/// Deletes all messages in the chat on this Mac; the contact keeps theirs.
+func apiClearChat(_ chat: ChatInfo) async throws -> ChatInfo {
+    let r: ChatResponse1 = try await chatSendCmd(.apiClearChat(type: chat.chatType, id: chat.apiId))
+    if case let .chatCleared(_, info) = r { return info }
+    throw r.unexpected
+}
+
 // MARK: - Connecting
 
 func apiAddContact(userId: Int64) async throws -> (CreatedConnLink, PendingContactConnection) {

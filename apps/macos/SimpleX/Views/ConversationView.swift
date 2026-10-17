@@ -58,6 +58,16 @@ struct ConversationView: View {
         }
         .navigationTitle(chat.chatInfo.chatViewName)
         .navigationSubtitle(subtitle)
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    ChatOptionsMenuItems(chat: chat)
+                } label: {
+                    Label("Chat Options", systemImage: chat.chatInfo.isMuted ? "bell.slash" : "ellipsis.circle")
+                }
+                .help("Notifications and history")
+            }
+        }
         .background(Color(nsColor: .textBackgroundColor))
         .quickLookPreview($store.quickLookURL)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in

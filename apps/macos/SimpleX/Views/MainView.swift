@@ -42,6 +42,7 @@ struct MainView: View {
                                        description: Text("Choose a conversation from the sidebar."))
             }
         }
+        .modifier(ClearChatConfirmation())
         .sheet(isPresented: $showNewChat) {
             NewChatSheet()
         }

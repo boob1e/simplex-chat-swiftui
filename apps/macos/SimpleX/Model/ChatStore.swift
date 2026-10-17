@@ -94,6 +94,9 @@ final class ChatStore {
 
     var showProfile = false
 
+    /// Chat waiting for confirmation to clear its history.
+    var chatToClear: ChatData?
+
     /// A SimpleX link to connect to, from a message or opened from another app. Shows the New Chat sheet.
     var pendingConnectLink: PendingLink?
 
@@ -244,6 +247,40 @@ final class ChatStore {
         try await apiDeleteChat(chat.chatInfo)
         chats.removeAll { $0.id == chat.id }
         if selectedChatId == chat.id { selectedChatId = nil }
+    }
+
+    func setNotifications(_ chat: ChatData, _ mode: MsgFilter) async throws {
+        var settings = chat.chatInfo.chatSettings ?? .defaults
+        settings.enableNtfs = mode
+        try await apiSetChatSettings(chat.chatInfo, settings)
+        guard let i = chats.firstIndex(where: { $0.id == chat.id }) else { return }
+        switch chats[i].chatInfo {
+        case var .direct(contact):
+            contact.chatSettings = settings
+            chats[i].chatInfo = .direct(contact: contact)
+        case .group(var groupInfo, let scope):
+            groupInfo.chatSettings = settings
+            chats[i].chatInfo = .group(groupInfo: groupInfo, groupChatScope: scope)
+        default:
+            break
+        }
+    }
+
+    func clearChat(_ chat: ChatData) async throws {
+        let info = try await apiClearChat(chat.chatInfo)
+        if let i = chats.firstIndex(where: { $0.id == chat.id }) {
+            chats[i].chatInfo = info
+            chats[i].chatItems = []
+            chats[i].chatStats = ChatStats()
+        }
+        if selectedChatId == chat.id {
+            items = []
+            hasOlderItems = false
+            hasNewerItems = false
+            replyTo = nil
+            editing = nil
+        }
+        NotificationManager.shared.removeNotifications(for: chat.id)
     }
 
     // MARK: Conversation
