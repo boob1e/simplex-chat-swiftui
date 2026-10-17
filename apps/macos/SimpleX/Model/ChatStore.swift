@@ -119,6 +119,7 @@ final class ChatStore {
                 registerGroupDefaults()
                 Self.coreInitialized = true
             }
+            migrateDatabaseKeyFromLegacyKeychain()
             if hasDatabase() && storeDBPassphraseGroupDefault.get() && kcDatabasePassword.get() == nil {
                 await self.fail("The encryption key for the existing database isn't in your keychain, so it can't be opened.", canReset: true)
                 return

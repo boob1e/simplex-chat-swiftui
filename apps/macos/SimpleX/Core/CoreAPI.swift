@@ -307,3 +307,26 @@ func mkValidName(_ s: String) -> String {
     var c = s.cString(using: .utf8)!
     return fromCString(chat_valid_name(&c)!)
 }
+
+/// Moves the database key from the login keychain (used by earlier builds) to the data protection keychain.
+/// The legacy item is removed only after the new one is saved, so the key can't be lost.
+func migrateDatabaseKeyFromLegacyKeychain() {
+    guard kcDatabasePassword.get() == nil else { return }
+    let legacy: [NSString: AnyObject] = [
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrAccount: "databasePassword" as NSString,
+        kSecUseDataProtectionKeychain: kCFBooleanFalse,
+    ]
+    var query = legacy
+    query[kSecReturnData] = kCFBooleanTrue
+    query[kSecMatchLimit] = kSecMatchLimitOne
+    var ref: AnyObject?
+    guard SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess,
+          let data = ref as? Data, let key = String(data: data, encoding: .utf8) else { return }
+    if kcDatabasePassword.set(key), kcDatabasePassword.get() == key {
+        let status = SecItemDelete(legacy as CFDictionary)
+        logger.notice("database key moved to the data protection keychain (legacy delete status \(status))")
+    } else {
+        logger.error("couldn't move the database key to the data protection keychain; still using the login keychain item")
+    }
+}

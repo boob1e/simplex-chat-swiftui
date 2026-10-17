@@ -115,5 +115,9 @@ private func baseItemQuery(forKey key: String) -> [NSString : AnyObject] {
     #if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
         query[kSecAttrAccessGroup] = ACCESS_GROUP
     #endif
+    #if os(macOS)
+        // The iOS-style keychain: access is tied to the app's signing identity, with no password prompts.
+        query[kSecUseDataProtectionKeychain] = kCFBooleanTrue
+    #endif
     return query
 }

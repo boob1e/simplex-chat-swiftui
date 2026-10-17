@@ -2,3 +2,4 @@ SimpleX.xcodeproj/
 Libraries/*
 !Libraries/.gitkeep
 build/
+Local.xcconfig

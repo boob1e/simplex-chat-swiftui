@@ -1,0 +1,6 @@
+// Code signing. Your team ID goes in Local.xcconfig (not committed):
+//   DEVELOPMENT_TEAM = XXXXXXXXXX
+// Without it, builds are signed ad hoc, and the keychain asks for your password after every rebuild.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+#include? "Local.xcconfig"
