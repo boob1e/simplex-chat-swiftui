@@ -275,7 +275,10 @@ func apiRejectContactRequest(_ contactReqId: Int64) async throws {
 
 enum ConnectResult {
     case connecting
-    case alreadyConnected(Contact)
+    /// The chat already exists: a known contact, or a group you're in.
+    case alreadyConnected(ChatId)
+    /// Joining a group: open its chat.
+    case joiningGroup(ChatId)
     case ownLink
 }
 
@@ -288,9 +291,10 @@ func connectViaLink(userId: Int64, link: String) async throws -> ConnectResult {
     case let .invitationLink(.ok(data, _)): contactData = data
     case let .contactAddress(.ok(data, _)): contactData = data
     case .invitationLink(.ownLink), .contactAddress(.ownLink): return .ownLink
-    case let .invitationLink(.known(contact)), let .contactAddress(.known(contact)): return .alreadyConnected(contact)
+    case let .invitationLink(.known(contact)), let .contactAddress(.known(contact)): return .alreadyConnected(contact.id)
     case .invitationLink(.connecting), .contactAddress(.connectingConfirmReconnect), .contactAddress(.connectingProhibit): return .connecting
-    case .groupLink: throw ConnectError.groupsNotSupported
+    case let .groupLink(plan):
+        return try await joinViaGroupLink(userId: userId, connLink: connLink, plan: plan)
     case let .error(e): throw e
     default: return .connecting
     }
@@ -309,14 +313,116 @@ func connectViaLink(userId: Int64, link: String) async throws -> ConnectResult {
     return .connecting
 }
 
+/// Group links: short links carry the group's profile, so the group is prepared as a chat and joined from it;
+/// older full links are joined directly and the group appears once the host accepts.
+private func joinViaGroupLink(userId: Int64, connLink: CreatedConnLink, plan: GroupLinkPlan) async throws -> ConnectResult {
+    switch plan {
+    case let .ok(info, data, _):
+        if let data {
+            let p: ChatResponse1 = try await chatSendCmd(.apiPrepareGroup(userId: userId, connLink: connLink, directLink: info?.direct ?? true, groupShortLinkData: data, verifiedDomain: nil))
+            guard case let .newPreparedChat(_, chat) = p, case let .group(groupInfo, _) = chat.chatInfo else { throw p.unexpected }
+            _ = try await apiConnectPreparedGroup(groupInfo.groupId)
+            return .joiningGroup(groupInfo.id)
+        }
+        let c: ChatResponse1 = try await chatSendCmd(.apiConnect(userId: userId, incognito: false, connLink: connLink))
+        switch c {
+        case .sentConfirmation, .sentInvitation: return .connecting
+        default: throw c.unexpected
+        }
+    case .ownLink: return .ownLink
+    case let .known(groupInfo): return .alreadyConnected(groupInfo.id)
+    case let .connectingProhibit(groupInfo?): return .alreadyConnected(groupInfo.id)
+    case .connectingConfirmReconnect, .connectingProhibit(nil): return .connecting
+    case .noRelays, .updateRequired: throw ConnectError.channelUnavailable
+    }
+}
+
 enum ConnectError: LocalizedError {
-    case groupsNotSupported
+    case channelUnavailable
+    case invitationRemoved
 
     var errorDescription: String? {
         switch self {
-        case .groupsNotSupported: "Joining groups isn't supported in this build yet."
+        case .channelUnavailable: "This channel can't be joined right now. Try again later, or update the app."
+        case .invitationRemoved: "This invitation is no longer valid. The group may have been deleted, or the invitation withdrawn."
         }
     }
+}
+
+// MARK: - Groups
+
+func apiNewGroup(userId: Int64, name: String) async throws -> GroupInfo {
+    let r: ChatResponse2 = try await chatSendCmd(.apiNewGroup(userId: userId, incognito: false, groupProfile: GroupProfile(displayName: name, fullName: "")))
+    if case let .groupCreated(_, groupInfo) = r { return groupInfo }
+    throw r.unexpected
+}
+
+func apiAddMember(groupId: Int64, contactId: Int64, role: GroupMemberRole) async throws -> GroupMember {
+    let r: ChatResponse2 = try await chatSendCmd(.apiAddMember(groupId: groupId, contactId: contactId, memberRole: role))
+    if case let .sentGroupInvitation(_, _, _, member) = r { return member }
+    throw r.unexpected
+}
+
+/// Accepts an invitation received from a contact.
+func apiJoinGroup(_ groupId: Int64) async throws -> GroupInfo {
+    let r: APIResult<ChatResponse2> = await chatApiSendCmd(.apiJoinGroup(groupId: groupId))
+    switch r {
+    case let .result(.userAcceptedGroupSent(_, groupInfo, _)): return groupInfo
+    case .error(.errorAgent(.SMP(_, .AUTH))), .error(.errorStore(.groupNotFound)): throw ConnectError.invitationRemoved
+    default: throw r.unexpected
+    }
+}
+
+/// Joins a group opened from a link.
+func apiConnectPreparedGroup(_ groupId: Int64) async throws -> GroupInfo {
+    let r: ChatResponse1 = try await chatSendCmd(.apiConnectPreparedGroup(groupId: groupId, incognito: false, msg: nil))
+    if case let .startedConnectionToGroup(_, groupInfo, _) = r { return groupInfo }
+    throw r.unexpected
+}
+
+func apiLeaveGroup(_ groupId: Int64) async throws -> GroupInfo {
+    let r: ChatResponse2 = try await chatSendCmd(.apiLeaveGroup(groupId: groupId))
+    if case let .leftMemberUser(_, groupInfo) = r { return groupInfo }
+    throw r.unexpected
+}
+
+func apiListMembers(_ groupId: Int64) async throws -> [GroupMember] {
+    let r: ChatResponse2 = try await chatSendCmd(.apiListMembers(groupId: groupId))
+    if case let .groupMembers(_, group) = r { return group.members }
+    throw r.unexpected
+}
+
+func apiRemoveMember(_ groupId: Int64, _ memberId: Int64) async throws -> GroupInfo {
+    let r: ChatResponse2 = try await chatSendCmd(.apiRemoveMembers(groupId: groupId, memberIds: [memberId], withMessages: false))
+    if case let .userDeletedMembers(_, groupInfo, _, _) = r { return groupInfo }
+    throw r.unexpected
+}
+
+func apiSetMemberRole(_ groupId: Int64, _ memberId: Int64, _ role: GroupMemberRole) async throws {
+    let r: ChatResponse2 = try await chatSendCmd(.apiMembersRole(groupId: groupId, memberIds: [memberId], memberRole: role))
+    if case .membersRoleUser = r { return }
+    throw r.unexpected
+}
+
+func apiGetGroupLink(_ groupId: Int64) async throws -> GroupLink? {
+    let r: APIResult<ChatResponse2> = await chatApiSendCmd(.apiGetGroupLink(groupId: groupId))
+    switch r {
+    case let .result(.groupLink(_, _, link)): return link
+    case .error(.errorStore(.groupLinkNotFound)): return nil
+    default: throw r.unexpected
+    }
+}
+
+func apiCreateGroupLink(_ groupId: Int64) async throws -> GroupLink {
+    let r: ChatResponse2 = try await chatSendCmd(.apiCreateGroupLink(groupId: groupId, memberRole: .member))
+    if case let .groupLinkCreated(_, _, link) = r { return link }
+    throw r.unexpected
+}
+
+func apiDeleteGroupLink(_ groupId: Int64) async throws {
+    let r: ChatResponse2 = try await chatSendCmd(.apiDeleteGroupLink(groupId: groupId))
+    if case .groupLinkDeleted = r { return }
+    throw r.unexpected
 }
 
 // MARK: - Helpers

@@ -145,8 +145,9 @@ struct NewChatSheet: View {
                 case .connecting:
                     try? await store.reloadChats()
                     dismiss()
-                case let .alreadyConnected(contact):
-                    store.selectedChatId = contact.id
+                case let .alreadyConnected(chatId), let .joiningGroup(chatId):
+                    try? await store.reloadChats()
+                    store.selectedChatId = chatId
                     dismiss()
                 case .ownLink:
                     status = String(localized: "This is your own link.")

@@ -30,6 +30,8 @@ struct SimpleXApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { showNewChat = true }
                     .keyboardShortcut("n")
+                Button("New Group…") { store.showNewGroup = true }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(store.phase != .running)
                 Button("My Profile and Address…") { store.showProfile = true }
                     .keyboardShortcut("p", modifiers: [.command, .shift])

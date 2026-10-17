@@ -27,10 +27,15 @@ struct MainView: View {
                         .help("Your profile and SimpleX address (⇧⌘P)")
                     }
                     ToolbarItem {
-                        Button { showNewChat = true } label: {
+                        Menu {
+                            Button("New Chat…") { showNewChat = true }
+                            Button("New Group…") { store.showNewGroup = true }
+                        } label: {
                             Label("New Chat", systemImage: "square.and.pencil")
+                        } primaryAction: {
+                            showNewChat = true
                         }
-                        .help("New chat (⌘N)")
+                        .help("New chat (⌘N) or group (⇧⌘N)")
                     }
                 }
         } detail: {
@@ -45,6 +50,14 @@ struct MainView: View {
         .modifier(ClearChatConfirmation())
         .sheet(isPresented: $showNewChat) {
             NewChatSheet()
+        }
+        .sheet(isPresented: $store.showNewGroup) {
+            NewGroupSheet()
+        }
+        .sheet(isPresented: $store.showGroupInfo) {
+            if case let .group(groupInfo, _) = store.selectedChat?.chatInfo {
+                GroupInfoSheet(groupId: groupInfo.groupId)
+            }
         }
         .sheet(isPresented: $store.showProfile) {
             ProfileView()

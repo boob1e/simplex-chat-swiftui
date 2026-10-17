@@ -46,6 +46,8 @@ struct ConversationView: View {
             Divider()
             if let request = PendingRequest(chat.chatInfo) {
                 ContactRequestBar(request: request)
+            } else if case let .group(groupInfo, _) = chat.chatInfo, groupInfo.awaitingJoin {
+                GroupJoinBar(groupInfo: groupInfo)
             } else {
                 ComposeBar(enabled: chat.chatInfo.sendMsgEnabled, replyTo: $store.replyTo, editing: $store.editing,
                            attachments: $store.attachments,
@@ -59,6 +61,15 @@ struct ConversationView: View {
         .navigationTitle(chat.chatInfo.chatViewName)
         .navigationSubtitle(subtitle)
         .toolbar {
+            if chat.chatInfo.chatType == .group {
+                ToolbarItem {
+                    Button { store.showGroupInfo = true } label: {
+                        Label("Group Info", systemImage: "person.2")
+                    }
+                    .help("Members and group link (⌘I)")
+                    .keyboardShortcut("i")
+                }
+            }
             ToolbarItem {
                 Menu {
                     ChatOptionsMenuItems(chat: chat)

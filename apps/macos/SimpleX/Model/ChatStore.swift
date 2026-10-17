@@ -97,6 +97,11 @@ final class ChatStore {
     /// Chat waiting for confirmation to clear its history.
     var chatToClear: ChatData?
 
+    var showNewGroup = false
+    var showGroupInfo = false
+    /// Bumped when a group's members change, so open member lists reload.
+    private(set) var membersVersion: [Int64: Int] = [:]
+
     /// A SimpleX link to connect to, from a message or opened from another app. Shows the New Chat sheet.
     var pendingConnectLink: PendingLink?
 
@@ -281,6 +286,71 @@ final class ChatStore {
             editing = nil
         }
         NotificationManager.shared.removeNotifications(for: chat.id)
+    }
+
+    // MARK: Groups
+
+    /// Creates the group, invites the chosen contacts as members and opens it.
+    /// Returns the names of contacts that couldn't be invited.
+    func createGroup(name: String, inviting contacts: [Contact]) async throws -> [String] {
+        guard let userId = currentUser?.userId else { return [] }
+        let groupInfo = try await apiNewGroup(userId: userId, name: name)
+        let failed = await invite(contacts, to: groupInfo.groupId)
+        try? await reloadChats()
+        selectedChatId = groupInfo.id
+        return failed
+    }
+
+    func invite(_ contacts: [Contact], to groupId: Int64) async -> [String] {
+        var failed: [String] = []
+        for contact in contacts {
+            do {
+                _ = try await apiAddMember(groupId: groupId, contactId: contact.contactId, role: .member)
+            } catch {
+                logger.error("inviting \(contact.contactId) to group \(groupId): \(responseError(error))")
+                failed.append(contact.chatViewName)
+            }
+        }
+        membersChanged(groupId)
+        return failed
+    }
+
+    /// Contacts you can invite: connected, and not already current members.
+    func contactsToInvite(excluding members: [GroupMember]) -> [Contact] {
+        let memberContactIds = Set(members.compactMap { $0.memberCurrent ? $0.memberContactId : nil })
+        return chats
+            .compactMap { if case let .direct(c) = $0.chatInfo, $0.chatInfo.sendMsgEnabled, !c.sendMsgToConnect { c } else { nil } }
+            .filter { !memberContactIds.contains($0.contactId) }
+            .sorted { $0.chatViewName.localizedCaseInsensitiveCompare($1.chatViewName) == .orderedAscending }
+    }
+
+    /// Accepts an invitation, or joins a group opened from a link.
+    func joinGroup(_ groupInfo: GroupInfo) async throws {
+        let updated = groupInfo.nextConnectPrepared
+            ? try await apiConnectPreparedGroup(groupInfo.groupId)
+            : try await apiJoinGroup(groupInfo.groupId)
+        updateInfo(.group(groupInfo: updated, groupChatScope: nil))
+    }
+
+    func leaveGroup(_ groupInfo: GroupInfo) async throws {
+        let updated = try await apiLeaveGroup(groupInfo.groupId)
+        updateInfo(.group(groupInfo: updated, groupChatScope: nil))
+        membersChanged(groupInfo.groupId)
+    }
+
+    func removeMember(_ member: GroupMember, from groupInfo: GroupInfo) async throws {
+        let updated = try await apiRemoveMember(groupInfo.groupId, member.groupMemberId)
+        updateInfo(.group(groupInfo: updated, groupChatScope: nil))
+        membersChanged(groupInfo.groupId)
+    }
+
+    func setRole(_ role: GroupMemberRole, of member: GroupMember, in groupInfo: GroupInfo) async throws {
+        try await apiSetMemberRole(groupInfo.groupId, member.groupMemberId, role)
+        membersChanged(groupInfo.groupId)
+    }
+
+    private func membersChanged(_ groupId: Int64) {
+        membersVersion[groupId, default: 0] += 1
     }
 
     // MARK: Conversation
@@ -566,8 +636,24 @@ final class ChatStore {
         case let .groupUpdated(user, groupInfo):
             guard isCurrentUser(user) else { return }
             updateInfo(.group(groupInfo: groupInfo, groupChatScope: nil))
-        case .contactDeletedByContact, .contactConnecting,
-             .receivedGroupInvitation, .userJoinedGroup, .groupDeleted, .deletedMemberUser:
+        case let .joinedGroupMember(user, groupInfo, _), let .connectedToGroupMember(user, groupInfo, _, _),
+             let .joinedGroupMemberConnecting(user, groupInfo, _, _), let .memberAcceptedByOther(user, groupInfo, _, _),
+             let .memberRole(user, groupInfo, _, _, _, _), let .memberBlockedForAll(user, groupInfo, _, _, _),
+             let .deletedMember(user, groupInfo, _, _, _), let .leftMember(user, groupInfo, _),
+             let .groupMemberUpdated(user, groupInfo, _, _):
+            guard isCurrentUser(user) else { return }
+            updateInfo(.group(groupInfo: groupInfo, groupChatScope: nil))
+            membersChanged(groupInfo.groupId)
+        case let .userJoinedGroup(user, groupInfo, _), let .userAcceptedGroupSent(user, groupInfo, _),
+             let .groupDeleted(user, groupInfo, _), let .deletedMemberUser(user, groupInfo, _, _):
+            guard isCurrentUser(user) else { return }
+            updateInfo(.group(groupInfo: groupInfo, groupChatScope: nil))
+            membersChanged(groupInfo.groupId)
+        case let .receivedGroupInvitation(user, groupInfo, contact, _):
+            guard isCurrentUser(user), let currentUser else { return }
+            scheduleReload()
+            NotificationManager.shared.notifyGroupInvitation(currentUser, groupInfo, from: contact)
+        case .contactDeletedByContact, .contactConnecting:
             scheduleReload()
         default:
             break

@@ -46,6 +46,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         post(createContactRequestNtf(user, request, 0), chatId: request.id, id: "\(request.id)/request")
     }
 
+    func notifyGroupInvitation(_ user: User, _ groupInfo: GroupInfo, from contact: Contact) {
+        let hide = ntfPreviewModeGroupDefault.get() == .hidden
+        let content = createNotification(
+            categoryIdentifier: "",
+            title: hide ? String(localized: "Group invitation") : String(localized: "Invitation to \(groupInfo.displayName)"),
+            body: hide ? String(localized: "You're invited to join a group.") : String(localized: "\(contact.chatViewName) invited you to join."),
+            userInfo: ["userId": user.userId],
+            badgeCount: 0
+        )
+        post(content, chatId: groupInfo.id, id: "\(groupInfo.id)/invitation")
+    }
+
     private func post(_ content: UNMutableNotificationContent, chatId: ChatId, id: String) {
         // Group per chat in Notification Center, and remember the chat so a click opens it.
         content.threadIdentifier = chatId
