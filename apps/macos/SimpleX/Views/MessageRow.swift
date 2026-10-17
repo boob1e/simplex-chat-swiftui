@@ -7,7 +7,7 @@ import SwiftUI
 import SimpleXChat
 
 /// Everything a row needs to draw itself, so the table can diff rows cheaply.
-struct MessageRowModel: Equatable, Identifiable {
+struct MessageRowModel: Hashable, Identifiable {
     let item: ChatItem
     /// Sender name above the first message of a run in a group.
     let senderName: String?

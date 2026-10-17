@@ -25,7 +25,9 @@ struct MessageList: NSViewRepresentable {
         table.backgroundColor = .clear
         table.selectionHighlightStyle = .none
         table.intercellSpacing = NSSize(width: 0, height: 2)
-        table.usesAutomaticRowHeights = true
+        // Heights are measured by the coordinator (heightOfRow), not by auto layout,
+        // so they're right as soon as a row changes, even while the window isn't redrawing.
+        table.usesAutomaticRowHeights = false
         table.style = .plain
         table.allowsColumnSelection = false
         let column = NSTableColumn(identifier: .init("message"))
@@ -51,6 +53,9 @@ struct MessageList: NSViewRepresentable {
         scroll.swipeTracker = context.coordinator.swipe
         NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.boundsChanged),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        scroll.contentView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(context.coordinator, selector: #selector(Coordinator.widthChanged),
+                                               name: NSView.frameDidChangeNotification, object: scroll.contentView)
         return scroll
     }
 
@@ -132,14 +137,57 @@ struct MessageList: NSViewRepresentable {
             let changed = IndexSet((0..<count).filter { rows[$0] != old[$0] })
             guard !changed.isEmpty else { return }
             table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
-            // The hosted SwiftUI rows only report their new size after their next layout pass,
-            // so measure on the next turn of the run loop; measuring now gets the old height.
-            DispatchQueue.main.async { [weak table] in
-                guard let table else { return }
-                let rows = IndexSet(changed.filter { $0 < table.numberOfRows })
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.15
-                    table.noteHeightOfRows(withIndexesChanged: rows)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.15
+                table.noteHeightOfRows(withIndexesChanged: changed)
+            }
+        }
+
+        // MARK: Row heights
+
+        private let sizer = NSHostingController(rootView: AnyView(EmptyView()))
+        private var heights: [Int64: (model: MessageRowModel, width: CGFloat, height: CGFloat)] = [:]
+        private var measuredWidth: CGFloat = 0
+
+        func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+            guard row < rows.count else { return 1 }
+            let model = rows[row]
+            let width = tableView.tableColumns.first?.width ?? tableView.bounds.width
+            if let cached = heights[model.id], cached.width == width, cached.model == model { return cached.height }
+            sizer.rootView = AnyView(MessageRow(model: model))
+            let height = max(1, ceil(sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude)).height))
+            heights[model.id] = (model, width, height)
+            return height
+        }
+
+        /// Text wraps differently at a new width, so rows are re-measured: during a live resize
+        /// only the visible ones (every frame), and all of them when the resize ends.
+        @objc func widthChanged() {
+            guard let table, let scrollView, !rows.isEmpty else { return }
+            let width = scrollView.contentView.bounds.width
+            guard abs(width - measuredWidth) > 0.5 else { return }
+            measuredWidth = width
+            if scrollView.inLiveResize {
+                let visible = table.rows(in: scrollView.contentView.bounds)
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: visible.location..<min(rows.count, visible.location + visible.length)))
+                observeLiveResizeEnd()
+            } else {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
+            }
+        }
+
+        private var liveResizeObserver: NSObjectProtocol?
+
+        private func observeLiveResizeEnd() {
+            guard liveResizeObserver == nil, let window = scrollView?.window else { return }
+            liveResizeObserver = NotificationCenter.default.addObserver(forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let o = self.liveResizeObserver { NotificationCenter.default.removeObserver(o) }
+                    self.liveResizeObserver = nil
+                    if let table = self.table, !self.rows.isEmpty {
+                        table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<self.rows.count))
+                    }
                 }
             }
         }
@@ -195,7 +243,8 @@ final class HostingCell: NSTableCellView {
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
         self.identifier = identifier
-        host.sizingOptions = [.intrinsicContentSize]
+        // The row height comes from the table; the hosted view just fills the cell.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
 
         replyIcon.image = NSImage(systemSymbolName: "arrowshape.turn.up.left.circle.fill", accessibilityDescription: "Reply")
@@ -222,7 +271,6 @@ final class HostingCell: NSTableCellView {
 
     func set(_ row: MessageRow) {
         host.rootView = AnyView(row)
-        host.invalidateIntrinsicContentSize()
         resetSwipe()
     }
 
