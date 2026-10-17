@@ -172,6 +172,19 @@ func prepareForSending(_ attachment: Attachment, caption: String) throws -> (Msg
     }
 }
 
+/// Profile image as a data URL: cropped to a square and small enough for profiles, as on iOS (12,500 characters).
+func avatarImageString(_ image: NSImage) -> String? {
+    guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+    let side = min(cg.width, cg.height)
+    guard let square = cg.cropping(to: CGRect(x: (cg.width - side) / 2, y: (cg.height - side) / 2, width: side, height: side)) else { return nil }
+    let start = side > 256 ? scaled(square, width: 256, height: 256) ?? square : square
+    let png = cgImageHasAlpha(start)
+    let prefix = "data:image/\(png ? "png" : "jpg");base64,"
+    let maxData = Int64(12_500 - prefix.count) * 3 / 4
+    guard let data = resizedImageData(start, maxDataSize: maxData, png: png) else { return nil }
+    return prefix + data.base64EncodedString()
+}
+
 /// Re-encodes the image, shrinking it until the encoded data fits in maxDataSize.
 private func resizedImageData(_ image: CGImage, maxDataSize: Int64, png: Bool) -> Data? {
     var img = image

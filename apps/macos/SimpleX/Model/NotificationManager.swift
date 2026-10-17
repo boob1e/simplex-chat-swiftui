@@ -22,7 +22,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     func setUp() {
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error { logger.error("notification authorization: \(error.localizedDescription)") }
+            if let error { logger.error("notification authorization: \(error.localizedDescription, privacy: .public) [\((error as NSError).domain, privacy: .public) \((error as NSError).code)]") }
             Task { @MainActor in await self.refreshAuthorization() }
         }
     }

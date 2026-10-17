@@ -154,6 +154,14 @@ final class ChatStore {
         try await startChat()
     }
 
+    /// Returns false when the name is already used by another of your profiles.
+    func updateProfile(_ profile: Profile) async throws -> Bool {
+        guard let user = currentUser else { return false }
+        guard let saved = try await apiUpdateProfile(userId: user.userId, profile: profile) else { return false }
+        currentUser?.profile = toLocalProfile(user.profile.profileId, saved, "")
+        return true
+    }
+
     private nonisolated func startChat() async throws {
         try setNetworkConfig(getNetCfg())
         try apiSetAppFilePaths()

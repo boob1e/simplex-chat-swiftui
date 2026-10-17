@@ -19,15 +19,22 @@ struct ProfileView: View {
     }
 
     @State private var tab: Tab = .address
+    @State private var editing = false
 
     var body: some View {
         VStack(spacing: 18) {
             if let user = store.currentUser {
-                VStack(spacing: 6) {
-                    AvatarView(image: user.image, name: user.displayName, size: 64)
-                    Text(user.displayName).font(.title2.weight(.semibold))
-                    if !user.fullName.isEmpty {
-                        Text(user.fullName).foregroundStyle(.secondary)
+                if editing {
+                    EditProfileForm(user: user) { editing = false }
+                } else {
+                    VStack(spacing: 6) {
+                        AvatarView(image: user.image, name: user.displayName, size: 64)
+                        Text(user.displayName).font(.title2.weight(.semibold))
+                        if !user.fullName.isEmpty {
+                            Text(user.fullName).foregroundStyle(.secondary)
+                        }
+                        Button("Edit Profile") { editing = true }
+                            .buttonStyle(.link)
                     }
                 }
             }
@@ -55,6 +62,126 @@ struct ProfileView: View {
         }
         .padding(24)
         .frame(width: 460)
+    }
+}
+
+/// Name and picture, sent to all your contacts when saved.
+private struct EditProfileForm: View {
+    @Environment(ChatStore.self) private var store
+    let done: () -> Void
+
+    @State private var displayName: String
+    @State private var fullName: String
+    @State private var image: String?
+    @State private var saving = false
+    @State private var error: String?
+    private let original: Profile
+
+    init(user: User, done: @escaping () -> Void) {
+        let profile = fromLocalProfile(user.profile)
+        original = profile
+        self.done = done
+        _displayName = State(initialValue: profile.displayName)
+        _fullName = State(initialValue: profile.fullName)
+        _image = State(initialValue: profile.image)
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Menu {
+                Button("Choose Picture…", action: choosePicture)
+                if image != nil {
+                    Button("Remove Picture", role: .destructive) { image = nil }
+                }
+            } label: {
+                AvatarView(image: image, name: displayName.isEmpty ? original.displayName : displayName, size: 64)
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "pencil.circle.fill")
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, Color.accentColor)
+                            .font(.title3)
+                    }
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Change picture")
+
+            Form {
+                TextField("Display name", text: $displayName)
+                TextField("Full name", text: $fullName, prompt: Text("Optional"))
+            }
+            .formStyle(.grouped)
+            .frame(maxWidth: 360, maxHeight: 120)
+            .onSubmit(save)
+
+            if let nameProblem {
+                Text(nameProblem).font(.callout).foregroundStyle(.secondary)
+            }
+            if let error {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+            }
+
+            HStack {
+                Button("Cancel", action: done)
+                Button(action: save) {
+                    if saving { ProgressView().controlSize(.small) } else { Text("Save") }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canSave)
+            }
+        }
+    }
+
+    private var trimmedName: String { displayName.trimmingCharacters(in: .whitespaces) }
+
+    private var nameProblem: String? {
+        if trimmedName.isEmpty { return String(localized: "Enter a display name.") }
+        if !validDisplayName(trimmedName) { return String(localized: "Display names can't contain some characters, such as # or @, and can't start with a space.") }
+        return nil
+    }
+
+    private var edited: Profile {
+        var p = original
+        p.displayName = trimmedName
+        p.fullName = fullName.trimmingCharacters(in: .whitespaces)
+        p.image = image
+        return p
+    }
+
+    private var canSave: Bool { !saving && nameProblem == nil && edited != original }
+
+    private func choosePicture() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let picked = NSImage(contentsOf: url), let str = avatarImageString(picked) else {
+            error = String(localized: "That picture couldn't be read.")
+            return
+        }
+        error = nil
+        image = str
+    }
+
+    private func save() {
+        guard canSave else { return }
+        saving = true
+        error = nil
+        Task {
+            defer { saving = false }
+            do {
+                if try await store.updateProfile(edited) {
+                    done()
+                } else {
+                    error = String(localized: "You already have a profile named \(trimmedName).")
+                }
+            } catch {
+                self.error = responseError(error)
+            }
+        }
     }
 }
 

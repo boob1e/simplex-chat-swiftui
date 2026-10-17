@@ -239,6 +239,17 @@ func apiDeleteMyAddress(userId: Int64) async throws {
     throw r.unexpected
 }
 
+/// Saves the profile and sends it to your contacts. Returns nil when another of your profiles already has this name.
+func apiUpdateProfile(userId: Int64, profile: Profile) async throws -> Profile? {
+    let r: APIResult<ChatResponse1> = await chatApiSendCmd(.apiUpdateProfile(userId: userId, profile: profile))
+    switch r {
+    case .result(.userProfileNoChange): return profile
+    case let .result(.userProfileUpdated(_, _, toProfile, _)): return toProfile
+    case .error(.errorStore(.duplicateName)): return nil
+    default: throw r.unexpected
+    }
+}
+
 func apiAcceptContactRequest(_ contactReqId: Int64) async throws -> Contact {
     let r: ChatResponse1 = try await chatSendCmd(.apiAcceptContact(incognito: false, contactReqId: contactReqId))
     if case let .acceptingContactRequest(_, contact) = r { return contact }
