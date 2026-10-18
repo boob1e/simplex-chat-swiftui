@@ -47,4 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: reply)
         return .terminateLater
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // The database is closed by now, so the new instance can import into it.
+        guard DesktopImport.relaunchOnQuit else { return }
+        let done = DispatchSemaphore(value: 0)
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in done.signal() }
+        _ = done.wait(timeout: .now() + 3)
+    }
 }

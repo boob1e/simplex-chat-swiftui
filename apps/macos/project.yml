@@ -64,6 +64,7 @@ targets:
         PRODUCT_NAME: SimpleX
         PRODUCT_BUNDLE_IDENTIFIER: chat.simplex.mac.app
         INFOPLIST_FILE: SimpleX/Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: SimpleX/Resources/SimpleX.entitlements
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
         LIBRARY_SEARCH_PATHS: $(PROJECT_DIR)/Libraries

@@ -97,6 +97,10 @@ final class ChatStore {
     /// Chat waiting for confirmation to clear its history.
     var chatToClear: ChatData?
 
+    var showDesktopImport = false
+    /// Why the last import from the desktop app didn't happen; the existing data was kept.
+    var importError: String?
+
     var showNewGroup = false
     var showGroupInfo = false
     /// Bumped when a group's members change, so open member lists reload.
@@ -128,6 +132,14 @@ final class ChatStore {
                 Self.coreInitialized = true
             }
             migrateDatabaseKeyFromLegacyKeychain()
+            if DesktopImport.pending {
+                do {
+                    try DesktopImport.perform()
+                } catch {
+                    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    await MainActor.run { self.importError = message }
+                }
+            }
             if hasDatabase() && storeDBPassphraseGroupDefault.get() && kcDatabasePassword.get() == nil {
                 await self.fail("The encryption key for the existing database isn't in your keychain, so it can't be opened.", canReset: true)
                 return

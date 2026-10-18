@@ -30,12 +30,16 @@ struct SimpleXApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat…") { showNewChat = true }
                     .keyboardShortcut("n")
+                    .disabled(store.phase != .running)
                 Button("New Group…") { store.showNewGroup = true }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(store.phase != .running)
                 Button("My Profile and Address…") { store.showProfile = true }
                     .keyboardShortcut("p", modifiers: [.command, .shift])
                     .disabled(store.phase != .running)
+                Divider()
+                Button("Import from SimpleX Desktop App…") { store.showDesktopImport = true }
+                    .disabled(store.phase == .starting)
             }
         }
 
@@ -52,6 +56,12 @@ struct RootView: View {
     @State private var confirmReset = false
 
     var body: some View {
+        content
+            .modifier(DesktopImportConfirmation())
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch store.phase {
         case .starting:
             ProgressView("Starting…")
